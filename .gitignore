@@ -1,0 +1,39 @@
+node_modules/
+dist/
+coverage/
+
+# Runtime state — never committed. Contains the SQLite DB, logs, artifacts, exports.
+data/
+
+# Local config and secrets
+gms.config.local.yaml
+gms.config.local.yml
+gms.config.local.json
+.env
+.env.*
+!.env.example
+*.local.yaml
+
+# Credentials
+*service-account*.json
+*credentials*.json
+!.dependency-cruiser.cjs
+
+# Legacy RTILA/Apps Script artifacts. Kept on disk as reference for the M1
+# importer, but deliberately not committed: they embed a live RTILA license key,
+# a customer email, and an unauthenticated Apps Script /exec URL that grants
+# read/write access to the source spreadsheet. Git history is hard to scrub.
+# Force-add individual files with `git add -f` if you decide otherwise.
+assests/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+*.swp
+.idea/
+.vscode/*
+!.vscode/extensions.json
+
+# Tooling caches
+.eslintcache
+*.tsbuildinfo

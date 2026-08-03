@@ -1,0 +1,51 @@
+# gms configuration
+#
+# Precedence, lowest to highest:
+#   built-in defaults -> this file -> gms.config.local.yaml -> GMS_* env vars -> CLI flags
+#
+# Every key below is optional; the values shown are the defaults. Put secrets in
+# environment variables, never in this file — this file is meant to be committed,
+# and gms.config.local.yaml (gitignored) is the place for personal overrides.
+#
+# Inspect the merged result at any time with:  gms config show --resolved
+
+project:
+  name: gms
+  # Root for all runtime state: database, logs, artifacts, exports.
+  # Relative paths resolve against this file's directory, not your shell's cwd.
+  dataDir: ./data
+
+database:
+  driver: sqlite
+  # Relative to project.dataDir.
+  file: gms.sqlite
+
+  # Write-ahead logging. Leave this on: it lets reads run while a worker writes.
+  wal: true
+
+  # Milliseconds to wait on a locked database before failing.
+  # Deliberately short. SQLite's busy handler sleeps the calling thread, and
+  # because the driver is synchronous that stalls every worker and timer in the
+  # process. Contention is handled by retry-with-jitter instead.
+  busyTimeoutMs: 250
+
+  # NORMAL is safe under WAL: a crash cannot corrupt the database, though the
+  # last transaction may be lost. FULL survives power loss but costs an fsync on
+  # every write.
+  synchronous: NORMAL
+
+  # Refuse to run if the database would live in a OneDrive/Dropbox/iCloud folder.
+  # Sync agents copy files mid-transaction and sync the -wal/-shm sidecars
+  # independently, which produces corrupt copies and can clobber the live file.
+  # Network shares are refused regardless of this setting.
+  allowCloudSync: false
+
+logging:
+  # trace | debug | info | warn | error | fatal
+  level: info
+  # 'auto' = human-readable on a terminal, NDJSON when piped.
+  pretty: auto
+  # Also write NDJSON logs to dataDir/logs.
+  file: true
+  # Extra redaction paths, merged with the built-in secret paths.
+  redact: []
