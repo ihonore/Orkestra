@@ -178,10 +178,12 @@ export async function findFeedSelector(page: Page): Promise<string | null> {
 export async function hasEndOfList(page: Page): Promise<boolean> {
   return page.evaluate(() => {
     const text = document.body?.innerText ?? '';
-    return (
-      /You've reached the end of the list/i.test(text) ||
-      /No more results/i.test(text) ||
-      document.querySelector('span.HlvSq') !== null
-    );
+    // Text only. An earlier version also checked `span.HlvSq`, which is a
+    // compiler-generated class name of exactly the kind this module exists to
+    // avoid — it rotates, and when it does it fails closed and silently. It
+    // added nothing the text checks do not already cover, and scroll
+    // termination does not depend on this function anyway: count stagnation is
+    // the primary signal and this is only a fast path.
+    return /You['’]ve reached the end of the list/i.test(text) || /No more results/i.test(text);
   });
 }

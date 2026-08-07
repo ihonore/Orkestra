@@ -470,3 +470,48 @@ describe('selector-rot health guard', () => {
     expect(tracker.channelBreakdown()['cid:url']).toBe(5);
   });
 });
+
+describe('selector hygiene', () => {
+  /**
+   * Google's class names are compiler-generated and rotate — `DUwDvf`, `Nv2PK`,
+   * `qBF1Pd`, `hfpxzc`. The legacy flow depended on them and broke. Semantic
+   * hooks (`data-item-id`, ARIA roles, href shape) are hardcoded in Google's own
+   * source and have held for years.
+   *
+   * This test is the enforcement of that rule. Without it the ban is a comment,
+   * and a hashed selector did in fact slip in once (`span.HlvSq`).
+   */
+  it('uses no compiler-generated class selectors in extraction code', async () => {
+    const fs = await import('node:fs');
+    const path = await import('node:path');
+    const url = await import('node:url');
+
+    const root = path.resolve(path.dirname(url.fileURLToPath(import.meta.url)), '..');
+    const files = [
+      'src/automations/google-maps/extract/from-dom.ts',
+      'src/automations/google-maps/search.ts',
+      'src/automations/google-maps/index.ts',
+      'src/core/browser/consent.ts',
+      'src/core/browser/pool.ts',
+    ];
+
+    // A class selector whose name looks generated: mixed case with no word
+    // boundary, or a short opaque token. Real semantic classes are lowercase
+    // and hyphenated.
+    const hashedClass = /['"`][^'"`]*\.[A-Za-z]*[A-Z][A-Za-z0-9]{3,}[^'"`]*['"`]/g;
+
+    const offenders: string[] = [];
+    for (const file of files) {
+      const source = fs.readFileSync(path.join(root, file), 'utf8');
+      for (const line of source.split('\n')) {
+        // Only look at lines that actually build a selector.
+        if (!/querySelector|locator\(|waitForSelector/.test(line)) continue;
+        if (line.trimStart().startsWith('*') || line.trimStart().startsWith('//')) continue;
+        const matches = line.match(hashedClass);
+        if (matches !== null) offenders.push(`${file}: ${line.trim()}`);
+      }
+    }
+
+    expect(offenders).toEqual([]);
+  });
+});
