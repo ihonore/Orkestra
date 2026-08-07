@@ -56,6 +56,26 @@ export function heading(text: string): string {
   return `\n${style.bold(text)}`;
 }
 
+/**
+ * A horizontal progress bar.
+ *
+ * Falls back to ASCII where the console cannot render block characters — the
+ * same Windows-console limitation the tick marks above work around.
+ */
+export function bar(fraction: number, width = 20): string {
+  const clamped = Math.max(0, Math.min(1, Number.isFinite(fraction) ? fraction : 0));
+  const filled = Math.round(clamped * width);
+  const [full, empty] = unicodeEnabled ? ['█', '░'] : ['#', '-'];
+  const colour = clamped >= 1 ? style.green : clamped > 0 ? style.cyan : style.grey;
+  return colour(full.repeat(filled)) + style.grey(empty.repeat(width - filled));
+}
+
+/** Format a fraction as a right-aligned percentage, e.g. " 49%". */
+export function percent(fraction: number): string {
+  const clamped = Math.max(0, Math.min(1, Number.isFinite(fraction) ? fraction : 0));
+  return `${Math.floor(clamped * 100)}%`.padStart(4);
+}
+
 export function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
   const units = ['KB', 'MB', 'GB', 'TB'];

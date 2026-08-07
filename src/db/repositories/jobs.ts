@@ -160,6 +160,15 @@ export class JobsRepository extends BaseRepository {
           SELECT id FROM jobs
            WHERE automation_id = :automationId
              AND status        = 'pending'
+             -- Belt and braces. reap() and fail() both retire a job once its
+             -- attempts are spent, so a 'pending' row over budget should be
+             -- unreachable — but if one ever exists (an older build, a manual
+             -- UPDATE), this stops it being claimed forever. A high-priority
+             -- poison job is picked first on every claim, so without a guard it
+             -- starves the whole queue rather than just wasting its own slot.
+             -- Costs ~0.1us/claim: the index stops covering, but LIMIT 1 means
+             -- exactly one row is ever fetched.
+             AND attempts < max_attempts
              AND scheduled_at <= :now
            ORDER BY priority DESC, scheduled_at ASC, id ASC
            LIMIT 1

@@ -22,6 +22,7 @@ import { runPlan } from './commands/plan.js';
 import { runJobsList, runJobsRetry, runStatus } from './commands/status.js';
 import { style, symbol } from './output.js';
 import type { JobStatus } from '../db/repositories/jobs.js';
+import type { GroupingName } from '../db/repositories/progress.js';
 
 interface GlobalOptions {
   readonly config?: string;
@@ -230,14 +231,34 @@ export function buildProgram(): Command {
     .command('status')
     .description('show queue progress, throughput and ETA')
     .option('-a, --automation <id>', 'restrict to one automation')
+    .addOption(
+      new Option('--by <grouping>', 'break progress down per group').choices([
+        'city',
+        'category',
+        'state',
+      ]),
+    )
+    .option('--incomplete', 'with --by, hide groups that have nothing left to run', false)
+    .option('-n, --limit <n>', 'with --by, maximum groups to show', toInt)
     .option('--json', 'emit machine-readable output', false)
-    .action((options: { automation?: string; json: boolean }) => {
-      runStatus({
-        config: configFrom(program),
-        ...(options.automation !== undefined && { automationId: options.automation }),
-        json: options.json,
-      });
-    });
+    .action(
+      (options: {
+        automation?: string;
+        by?: GroupingName;
+        incomplete: boolean;
+        limit?: number;
+        json: boolean;
+      }) => {
+        runStatus({
+          config: configFrom(program),
+          ...(options.automation !== undefined && { automationId: options.automation }),
+          ...(options.by !== undefined && { by: options.by }),
+          incompleteOnly: options.incomplete,
+          ...(options.limit !== undefined && { limit: options.limit }),
+          json: options.json,
+        });
+      },
+    );
 
   const jobs = program.command('jobs').description('inspect and steer individual jobs');
   jobs

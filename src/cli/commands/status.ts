@@ -12,13 +12,24 @@ import {
   type JobRecord,
   type JobStatus,
 } from '../../db/repositories/jobs.js';
+import {
+  GROUPINGS,
+  ProgressRepository,
+  type GroupingName,
+  type ProgressGroup,
+} from '../../db/repositories/progress.js';
 import { CategoriesRepository, CitiesRepository } from '../../db/repositories/seeds.js';
-import { formatDuration, heading, keyValue, style, symbol } from '../output.js';
+import { bar, formatDuration, heading, keyValue, percent, style, symbol } from '../output.js';
 
 export interface StatusOptions {
   readonly config: ResolvedConfig;
   readonly automationId?: string;
   readonly json?: boolean;
+  /** Break the queue down by city, category or state instead of totals only. */
+  readonly by?: GroupingName;
+  /** Hide groups with nothing left to run. */
+  readonly incompleteOnly?: boolean;
+  readonly limit?: number;
 }
 
 const STATUS_STYLE: Record<JobStatus, (s: string) => string> = {
@@ -30,10 +41,65 @@ const STATUS_STYLE: Record<JobStatus, (s: string) => string> = {
   paused: style.yellow,
 };
 
+/** Render the per-group breakdown for `status --by city|category|state`. */
+function renderGroups(groups: readonly ProgressGroup[], by: GroupingName): void {
+  if (groups.length === 0) {
+    console.log(style.grey('Nothing to show — no jobs match.'));
+    return;
+  }
+
+  const labelWidth = Math.min(
+    28,
+    groups.reduce((max, g) => Math.max(max, g.label.length), 0),
+  );
+  const complete = groups.filter((g) => g.pending + g.leased + g.failed === 0).length;
+
+  console.log(heading(`Progress by ${by}`));
+  for (const g of groups) {
+    const fraction = g.total === 0 ? 0 : (g.done + g.skipped) / g.total;
+    const label = g.label.length > labelWidth ? `${g.label.slice(0, labelWidth - 1)}…` : g.label;
+    const suffix =
+      g.sublabel !== null && g.sublabel !== g.label ? style.grey(` ${g.sublabel}`) : '';
+    const counts = `${String(g.done).padStart(5)}/${String(g.total).padEnd(5)}`;
+    const problems =
+      g.failed > 0
+        ? style.red(` ${g.failed} failed`)
+        : g.leased > 0
+          ? style.cyan(` ${g.leased} running`)
+          : '';
+
+    console.log(
+      `  ${label.padEnd(labelWidth)}${suffix.padEnd(suffix === '' ? 0 : 4)} ` +
+        `${bar(fraction)} ${percent(fraction)} ${style.grey(counts)}${problems}`,
+    );
+  }
+
+  console.log(`\n${style.grey(`${complete} of ${groups.length} ${by}(s) complete`)}`);
+}
+
 export function runStatus(options: StatusOptions): void {
   const driver = openDatabaseFromConfig(options.config);
   try {
     const jobs = new JobsRepository(driver);
+
+    if (options.by !== undefined) {
+      const grouping = GROUPINGS[options.by];
+      const groups = new ProgressRepository(driver).groups({
+        automationId: options.automationId ?? 'google-maps',
+        idPath: grouping.idPath,
+        labelPath: grouping.labelPath,
+        ...('sublabelPath' in grouping && { sublabelPath: grouping.sublabelPath }),
+        ...(options.incompleteOnly !== undefined && { incompleteOnly: options.incompleteOnly }),
+        ...(options.limit !== undefined && { limit: options.limit }),
+      });
+
+      if (options.json === true) {
+        console.log(JSON.stringify({ by: options.by, groups }, null, 2));
+        return;
+      }
+      renderGroups(groups, options.by);
+      return;
+    }
     const counts = jobs.counts(options.automationId);
     const total = Object.values(counts).reduce((a, b) => a + b, 0);
     const cities = new CitiesRepository(driver).count();
