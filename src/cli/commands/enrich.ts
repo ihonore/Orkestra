@@ -44,9 +44,9 @@ export async function runEnrichEmails(options: EnrichCommandOptions): Promise<vo
     logger,
   });
   shutdown.install();
-  shutdown.onShutdown('database', () => {
-    if (driver.open) driver.close();
-  });
+  // No database close here: shutdown tasks run while crawl workers are still
+  // committing their results, and closing underneath them would discard the
+  // work a graceful stop is meant to save. The `finally` block closes it.
 
   const startedAt = Date.now();
   const maxDomains = options.maxDomains ?? Number.POSITIVE_INFINITY;

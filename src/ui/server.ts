@@ -19,8 +19,10 @@ import { ConfigSchema } from '../config/schema.js';
 import { openDatabaseFromConfig } from '../db/client.js';
 import { JobsRepository } from '../db/repositories/jobs.js';
 import type { Logger } from '../core/logging/logger.js';
+import { safeSegment } from '../core/util/paths.js';
 import { PAGE } from './page.js';
 import * as api from './api.js';
+import { TaskManager, cliEntryPoint, type TaskName } from './tasks.js';
 
 export interface UiServerOptions {
   readonly config: ResolvedConfig;
@@ -29,6 +31,105 @@ export interface UiServerOptions {
   readonly logger?: Logger;
   /** Allow the config editor to write gms.config.local.yaml. */
   readonly allowConfigWrite?: boolean;
+  /** Let the page start and stop scrapes, imports and exports. */
+  readonly allowControl?: boolean;
+  readonly configFile?: string;
+}
+
+/**
+ * Commands the dashboard may start, and how its form fields map to flags.
+ *
+ * An allow-list of *named* commands with typed parameters, never a free-text
+ * command line. The page can ask for "run with 4 workers"; it cannot ask for
+ * anything else, so a compromised page cannot execute arbitrary programs.
+ */
+const COMMANDS: Record<
+  TaskName,
+  { label: string; build: (input: Record<string, unknown>) => string[] }
+> = {
+  run: {
+    label: 'Scrape Google Maps',
+    build: (input) => {
+      const args = ['run'];
+      const workers = clampInt(input['workers'], 1, 32);
+      const maxJobs = clampInt(input['maxJobs'], 1, 100_000);
+      if (workers !== null) args.push('--workers', String(workers));
+      if (maxJobs !== null) args.push('--max-jobs', String(maxJobs));
+      if (input['headful'] === true) args.push('--headful');
+      return args;
+    },
+  },
+  enrich: {
+    label: 'Find email addresses',
+    build: (input) => {
+      const args = ['enrich', 'emails'];
+      const workers = clampInt(input['workers'], 1, 64);
+      const maxDomains = clampInt(input['maxDomains'], 1, 100_000);
+      if (workers !== null) args.push('--workers', String(workers));
+      if (maxDomains !== null) args.push('--max-domains', String(maxDomains));
+      return args;
+    },
+  },
+  plan: {
+    label: 'Create jobs',
+    build: (input) => {
+      const args = ['plan'];
+      const cities = asList(input['cities']);
+      const categories = asList(input['categories']);
+      const limit = clampInt(input['limit'], 1, 1_000_000);
+      if (cities !== null) args.push('--cities', cities);
+      if (categories !== null) args.push('--categories', categories);
+      if (limit !== null) args.push('--limit', String(limit));
+      return args;
+    },
+  },
+  export: {
+    label: 'Export CSV',
+    build: (input) => {
+      const args = ['export', 'csv'];
+      const entity = input['entity'];
+      if (entity === 'businesses' || entity === 'emails' || entity === 'leads-flat') {
+        args.push('--entity', entity);
+      }
+      if (input['full'] === true) args.push('--full');
+      if (input['excelSafe'] === true) args.push('--excel-safe');
+      if (input['splitByState'] === true) args.push('--split-by', 'state');
+      return args;
+    },
+  },
+  'import-cities': {
+    label: 'Import cities',
+    build: (input) => buildImport('cities', input),
+  },
+  'import-categories': {
+    label: 'Import categories',
+    build: (input) => buildImport('categories', input),
+  },
+};
+
+function buildImport(what: 'cities' | 'categories', input: Record<string, unknown>): string[] {
+  const file = typeof input['file'] === 'string' ? input['file'] : '';
+  const args = ['import', what, file];
+  const sheet = input['sheet'];
+  if (typeof sheet === 'string' && sheet !== '') args.push('--sheet', sheet);
+  return args;
+}
+
+function clampInt(value: unknown, min: number, max: number): number | null {
+  const n = typeof value === 'number' ? value : Number(value);
+  if (!Number.isFinite(n)) return null;
+  return Math.min(max, Math.max(min, Math.round(n)));
+}
+
+/** Accept a comma-separated selector list, stripping anything shell-ish. */
+function asList(value: unknown): string | null {
+  if (typeof value !== 'string' || value.trim() === '') return null;
+  const cleaned = value
+    .split(',')
+    .map((s) => s.trim().replace(/[^\w\s.-]/g, ''))
+    .filter((s) => s !== '')
+    .join(',');
+  return cleaned === '' ? null : cleaned;
 }
 
 /**
@@ -148,10 +249,35 @@ export interface RunningServer {
   close(): Promise<void>;
 }
 
+/** Read a JSON request body, with a size cap. */
+function readBody(req: http.IncomingMessage, done: (body: unknown) => void): void {
+  let raw = '';
+  req.on('data', (chunk: Buffer) => {
+    raw += chunk.toString('utf8');
+    if (raw.length > 64_000) req.destroy();
+  });
+  req.on('end', () => {
+    try {
+      done(JSON.parse(raw));
+    } catch {
+      done({});
+    }
+  });
+}
+
 export function startUiServer(options: UiServerOptions): Promise<RunningServer> {
   const { config } = options;
   const host = options.host ?? '127.0.0.1';
   const port = options.port ?? 4600;
+
+  const tasks =
+    options.allowControl === true
+      ? new TaskManager({
+          cliEntry: cliEntryPoint(),
+          cwd: config.paths.root,
+          ...(options.configFile !== undefined && { configFile: options.configFile }),
+        })
+      : null;
 
   const server = http.createServer((req, res) => {
     const url = new URL(req.url ?? '/', `http://${host}:${port}`);
@@ -276,6 +402,100 @@ export function startUiServer(options: UiServerOptions): Promise<RunningServer> 
         return;
       }
 
+      if (url.pathname === '/api/tasks' && req.method === 'GET') {
+        json(res, 200, {
+          enabled: options.allowControl === true,
+          running: tasks?.running() ?? null,
+          tasks: (tasks?.list() ?? []).slice(0, 12),
+        });
+        return;
+      }
+
+      if (url.pathname === '/api/tasks/start' && req.method === 'POST') {
+        if (tasks === null) {
+          json(res, 403, { error: 'controls are disabled — restart with --allow-control' });
+          return;
+        }
+        readBody(req, (body) => {
+          const input = body as { command?: string; options?: Record<string, unknown> };
+          const name = input.command as TaskName | undefined;
+          const command = name !== undefined ? COMMANDS[name] : undefined;
+          if (command === undefined) {
+            json(res, 400, { error: `unknown command: ${String(input.command)}` });
+            return;
+          }
+          const started = tasks.start({
+            name: name!,
+            label: command.label,
+            args: command.build(input.options ?? {}),
+          });
+          json(res, started.ok ? 200 : 409, started.ok ? started.task : { error: started.error });
+        });
+        return;
+      }
+
+      if (url.pathname === '/api/tasks/stop' && req.method === 'POST') {
+        if (tasks === null) {
+          json(res, 403, { error: 'controls are disabled' });
+          return;
+        }
+        readBody(req, (body) => {
+          const id = (body as { id?: string }).id ?? '';
+          json(res, 200, { stopped: tasks.stop(id) });
+        });
+        return;
+      }
+
+      // Seed-file upload. The browser posts the raw bytes with the name in the
+      // query string, which avoids parsing multipart form data by hand — the
+      // only thing a dependency would buy here.
+      if (url.pathname === '/api/upload' && req.method === 'POST') {
+        if (tasks === null) {
+          json(res, 403, { error: 'controls are disabled' });
+          return;
+        }
+        const name = safeSegment(url.searchParams.get('name') ?? 'upload.xlsx', 64);
+        const dir = path.join(config.paths.dataDir, 'uploads');
+        fs.mkdirSync(dir, { recursive: true });
+        const target = path.join(dir, name);
+
+        const chunks: Buffer[] = [];
+        let size = 0;
+        req.on('data', (chunk: Buffer) => {
+          size += chunk.length;
+          // A seed workbook is well under this; the cap stops a runaway upload
+          // filling the disk the database lives on.
+          if (size > 64 * 1024 * 1024) {
+            req.destroy();
+            return;
+          }
+          chunks.push(chunk);
+        });
+        req.on('end', () => {
+          try {
+            fs.writeFileSync(target, Buffer.concat(chunks));
+            json(res, 200, { file: target, bytes: size });
+          } catch (error) {
+            json(res, 500, { error: error instanceof Error ? error.message : String(error) });
+          }
+        });
+        return;
+      }
+
+      /** Sheet names in an uploaded workbook, so the user can pick one. */
+      if (url.pathname === '/api/sheets' && req.method === 'GET') {
+        const file = url.searchParams.get('file') ?? '';
+        void import('../importers/xlsx.js')
+          .then(({ sheetNames }) => sheetNames(file))
+          .then((names) => {
+            json(res, 200, { sheets: names });
+          })
+          .catch((error: unknown) => {
+            json(res, 400, { error: error instanceof Error ? error.message : String(error) });
+          });
+        return;
+      }
+
       if (url.pathname === '/api/jobs/retry' && req.method === 'POST') {
         const driver = openDatabaseFromConfig(config);
         try {
@@ -307,6 +527,9 @@ export function startUiServer(options: UiServerOptions): Promise<RunningServer> 
         url: `http://${host}:${actualPort}`,
         close: () =>
           new Promise<void>((done) => {
+            // Stop child tasks first: a scrape outliving the dashboard would
+            // keep a browser and a job lease with nothing supervising it.
+            tasks?.stopAll();
             server.close(() => {
               done();
             });

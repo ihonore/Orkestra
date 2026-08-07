@@ -23,10 +23,9 @@ afterEach(async () => {
 });
 
 /** A project directory with a migrated, empty database. */
-async function serve(options: { allowConfigWrite?: boolean } = {}): Promise<{
-  url: string;
-  root: string;
-}> {
+async function serve(
+  options: { allowConfigWrite?: boolean; allowControl?: boolean } = {},
+): Promise<{ url: string; root: string }> {
   const root = tempDir();
   writeFile(root, 'gms.config.yaml', 'project:\n  name: test\n');
   const config = loadConfig({ cwd: root, env: {} });
@@ -42,6 +41,7 @@ async function serve(options: { allowConfigWrite?: boolean } = {}): Promise<{
     ...(options.allowConfigWrite !== undefined && {
       allowConfigWrite: options.allowConfigWrite,
     }),
+    ...(options.allowControl !== undefined && { allowControl: options.allowControl }),
   });
   running.push(server);
   return { url: server.url, root };
@@ -221,5 +221,134 @@ describe('page document', () => {
 
   it('routes on hashchange, so back and forward work', () => {
     expect(PAGE).toContain("addEventListener('hashchange'");
+  });
+});
+
+describe('task controls', () => {
+  it('are refused unless explicitly enabled', async () => {
+    const { url } = await serve();
+    const start = await fetch(`${url}/api/tasks/start`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ command: 'run' }),
+    });
+    expect(start.status).toBe(403);
+
+    const listed = (await (await fetch(`${url}/api/tasks`)).json()) as { enabled: boolean };
+    expect(listed.enabled).toBe(false);
+  });
+
+  it('refuses a command that is not on the allow-list', async () => {
+    // The page names a command; it never supplies a command line. Anything
+    // outside the list must be rejected rather than executed.
+    const { url } = await serve({ allowControl: true });
+    for (const command of ['rm', 'db', '../../bin/sh', '']) {
+      const response = await fetch(`${url}/api/tasks/start`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ command }),
+      });
+      expect(response.status, command).toBe(400);
+    }
+  });
+
+  it('runs a real command and reports its output', async () => {
+    const { url } = await serve({ allowControl: true });
+    const started = (await (
+      await fetch(`${url}/api/tasks/start`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ command: 'export', options: { entity: 'businesses' } }),
+      })
+    ).json()) as { id: string };
+    expect(started.id).toBeTruthy();
+
+    // Poll until it finishes; an export of an empty database is quick.
+    let task: { state: string; lines: string[] } | undefined;
+    for (let i = 0; i < 60; i += 1) {
+      await new Promise((r) => setTimeout(r, 500));
+      const list = (await (await fetch(`${url}/api/tasks`)).json()) as {
+        tasks: { id: string; state: string; lines: string[] }[];
+      };
+      task = list.tasks.find((t) => t.id === started.id);
+      if (task !== undefined && task.state !== 'running') break;
+    }
+
+    expect(task?.state).toBe('succeeded');
+    expect(task?.lines.join('\n')).toMatch(/Nothing to export|row\(s\) exported/);
+  }, 45_000);
+
+  it('refuses a second copy of the same command', async () => {
+    const { url } = await serve({ allowControl: true });
+    const body = JSON.stringify({ command: 'run', options: { workers: 1, maxJobs: 1 } });
+    const headers = { 'content-type': 'application/json' };
+
+    const first = await fetch(`${url}/api/tasks/start`, { method: 'POST', headers, body });
+    expect(first.status).toBe(200);
+
+    // Two scrapes against one queue is safe but never intended by a click.
+    const second = await fetch(`${url}/api/tasks/start`, { method: 'POST', headers, body });
+    expect(second.status).toBe(409);
+
+    const id = ((await first.json()) as { id: string }).id;
+    await fetch(`${url}/api/tasks/stop`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ id }),
+    });
+  }, 30_000);
+
+  it('clamps numeric options rather than passing them through', async () => {
+    // A worker count of 10,000 would exhaust memory; the flag builder bounds it.
+    const { url } = await serve({ allowControl: true });
+    const started = (await (
+      await fetch(`${url}/api/tasks/start`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ command: 'export', options: { entity: 'businesses' } }),
+      })
+    ).json()) as { args: string[] };
+    expect(started.args).toEqual(['export', 'csv', '--entity', 'businesses']);
+  });
+
+  it('strips shell metacharacters from free-text selectors', async () => {
+    const { url } = await serve({ allowControl: true });
+    const started = (await (
+      await fetch(`${url}/api/tasks/start`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ command: 'plan', options: { cities: 'Boston; rm -rf /' } }),
+      })
+    ).json()) as { args: string[] };
+
+    expect(started.args.join(' ')).not.toContain(';');
+    expect(started.args.join(' ')).not.toContain('/');
+  });
+
+  it('accepts an upload and keeps it inside the data directory', async () => {
+    const { url, root } = await serve({ allowControl: true });
+    const response = await fetch(`${url}/api/upload?name=seeds.xlsx`, {
+      method: 'POST',
+      body: Buffer.from('not really a workbook'),
+    });
+
+    const body = (await response.json()) as { file: string };
+    expect(response.status).toBe(200);
+    expect(body.file).toContain(path.join(root, 'data', 'uploads'));
+    expect(fs.existsSync(body.file)).toBe(true);
+  });
+
+  it('sanitizes a traversing upload name', async () => {
+    // A filename is attacker-controlled input that becomes a path.
+    const { url, root } = await serve({ allowControl: true });
+    const body = (await (
+      await fetch(`${url}/api/upload?name=${encodeURIComponent('../../etc/passwd')}`, {
+        method: 'POST',
+        body: Buffer.from('x'),
+      })
+    ).json()) as { file: string };
+
+    expect(body.file).toContain(path.join(root, 'data', 'uploads'));
+    expect(body.file).not.toContain('..');
   });
 });

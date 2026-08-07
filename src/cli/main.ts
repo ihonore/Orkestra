@@ -363,18 +363,35 @@ export function buildProgram(): Command {
 
   program
     .command('ui')
-    .description('open the local dashboard')
+    .description('open the local dashboard — run everything from a browser')
     .option('-p, --port <n>', 'port to listen on', toInt, 4600)
-    .option('--open', 'open a browser window', false)
-    .option('--allow-config-write', 'let the page edit gms.config.local.yaml', false)
-    .action(async (options: { port: number; open: boolean; allowConfigWrite: boolean }) => {
-      await runUi({
-        config: configFrom(program),
-        port: options.port,
-        open: options.open,
-        allowConfigWrite: options.allowConfigWrite,
-      });
-    });
+    .option('--no-open', 'do not open a browser window')
+    .option(
+      '-c, --control',
+      'let the page start scrapes, imports and exports, and edit settings',
+      false,
+    )
+    .option('--allow-config-write', 'edit settings only, without task controls', false)
+    .action(
+      async (options: {
+        port: number;
+        open: boolean;
+        control: boolean;
+        allowConfigWrite: boolean;
+      }) => {
+        const globals = program.opts<GlobalOptions>();
+        await runUi({
+          config: configFrom(program),
+          port: options.port,
+          open: options.open,
+          // --control implies settings editing: someone who can start a scrape
+          // can already change how it runs.
+          allowControl: options.control,
+          allowConfigWrite: options.control || options.allowConfigWrite,
+          ...(globals.config !== undefined && { configFile: globals.config }),
+        });
+      },
+    );
 
   const exportCmd = program.command('export').description('write results out');
   exportCmd

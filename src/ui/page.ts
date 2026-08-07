@@ -225,6 +225,55 @@ export const PAGE = String.raw`<!doctype html>
 
   .empty { padding: 42px; text-align: center; color: var(--faint); }
 
+  /* ── Control: numbered steps, because this genuinely is a sequence ──── */
+  .step {
+    border: 1px solid var(--rule); background: var(--panel);
+    margin-bottom: 13px; padding: 17px 19px;
+    display: grid; grid-template-columns: 34px 1fr auto; gap: 17px; align-items: start;
+  }
+  .step.blocked { opacity: .45; }
+  .step .idx {
+    font: 400 19px/1 var(--mono); color: var(--faint);
+    border: 1px solid var(--rule); width: 34px; height: 34px;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .step.ready .idx { color: var(--amber); border-color: var(--amber); }
+  .step.satisfied .idx { color: var(--verdigris); border-color: var(--verdigris); }
+  .step h3 { margin: 0 0 3px; font: 600 15px/1.3 var(--sans); }
+  .step p { margin: 0; color: var(--dim); font-size: 12px; }
+  .step .opts { display: flex; gap: 9px; flex-wrap: wrap; margin-top: 13px; align-items: center; }
+  .step .opts label { font: 500 11px/1 var(--sans); color: var(--faint); letter-spacing: .05em; }
+  .step .opts input[type=number] { width: 78px; }
+  .step .opts input[type=number], .step .opts input[type=text], .step .opts select {
+    background: var(--panel-2); border: 1px solid var(--rule); padding: 6px 9px;
+  }
+  .step .opts input[type=file] { font-size: 11px; color: var(--dim); max-width: 260px; }
+
+  .go {
+    background: var(--amber); color: #0b181f; border: 0;
+    padding: 10px 19px; cursor: pointer; font-weight: 600;
+    font-family: var(--sans); letter-spacing: .04em; white-space: nowrap;
+  }
+  .go.ghost { background: transparent; color: var(--dim); border: 1px solid var(--rule); }
+  .go.stop { background: var(--rust); color: #fff; }
+  .go:disabled { opacity: .35; cursor: not-allowed; }
+
+  .runbar {
+    display: flex; align-items: center; gap: 13px;
+    border: 1px solid var(--rule); background: var(--panel);
+    padding: 13px 17px; margin-bottom: 11px;
+  }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--faint); flex: none; }
+  .dot.live { background: var(--amber); animation: pulse 1.4s ease-in-out infinite; }
+  .dot.ok { background: var(--verdigris); }
+  .dot.bad { background: var(--rust); }
+  @keyframes pulse { 0%,100% { opacity: 1 } 50% { opacity: .25 } }
+
+  .console {
+    max-height: 340px; overflow-y: auto; white-space: pre-wrap;
+    word-break: break-word; font-size: 11.5px; line-height: 1.65; margin: 0;
+  }
+
   @media (max-width: 820px) {
     .frame { grid-template-columns: 1fr; }
     nav { position: static; height: auto; flex-direction: row; overflow-x: auto; }
@@ -239,6 +288,7 @@ export const PAGE = String.raw`<!doctype html>
   <nav>
     <div class="brand">gms<span>.</span><small>sweep control</small></div>
     <a href="#overview" class="on" data-tab="overview">Overview</a>
+    <a href="#control" data-tab="control">Control</a>
     <a href="#sweep" data-tab="sweep">Sweep</a>
     <a href="#leads" data-tab="leads">Leads</a>
     <a href="#issues" data-tab="issues">Issues</a>
@@ -257,6 +307,17 @@ export const PAGE = String.raw`<!doctype html>
       <div class="readout" id="ov-yield"></div>
       <div class="label" style="margin:26px 0 11px">Website crawl</div>
       <div class="readout" id="ov-domains"></div>
+    </section>
+
+    <section id="control">
+      <h2>Control</h2>
+      <div class="sub" id="ctl-sub"></div>
+
+      <div id="steps"></div>
+
+      <div class="label" style="margin:30px 0 11px">Activity</div>
+      <div class="runbar" id="runbar"></div>
+      <pre class="console" id="log">No task has run yet.</pre>
     </section>
 
     <section id="sweep">
@@ -355,6 +416,7 @@ function readout(target, cells) {
 function show(tab) {
   $$('section').forEach((s) => s.classList.toggle('on', s.id === tab));
   $$('nav a').forEach((a) => a.classList.toggle('on', a.dataset.tab === tab));
+  if (tab === 'control') loadControl();
   if (tab === 'sweep') loadPlate();
   if (tab === 'leads') loadLeads();
   if (tab === 'issues') loadIssues();
@@ -401,10 +463,224 @@ async function loadOverview() {
     { k: 'Skipped', v: num(d.skipped) },
   ]);
 
-  $('#pulse').textContent = o.jobs.leased > 0
-    ? o.jobs.leased + ' running'
-    : (o.jobs.pending > 0 ? 'idle · ' + num(o.jobs.pending) + ' queued' : 'sweep complete');
+  // A lease is not a running process: an aborted run leaves one held until the
+  // reaper reclaims it, and calling that "running" sends people looking for a
+  // process that already exited.
+  $('#pulse').textContent = ctlState.running
+    ? 'working · ' + ctlState.running.label.toLowerCase()
+    : o.jobs.leased > 0
+      ? o.jobs.leased + ' job(s) leased'
+      : o.jobs.pending > 0
+        ? 'idle · ' + num(o.jobs.pending) + ' queued'
+        : o.jobsTotal > 0 ? 'sweep complete' : 'no jobs yet';
 }
+
+// ── Control ────────────────────────────────────────────────────────────
+// Steps are numbered because this really is a sequence: you cannot plan jobs
+// before importing seeds, or find emails before scraping websites. The number
+// encodes a dependency, not decoration.
+let ctlState = { enabled: false, running: null, tasks: [] };
+let ctlOverview = null;
+let uploaded = { cities: null, categories: null };
+
+async function loadControl() {
+  const [t, o] = await Promise.all([get('/api/tasks'), get('/api/overview')]);
+  ctlState = t; ctlOverview = o;
+
+  $('#ctl-sub').textContent = t.enabled
+    ? 'Run everything from here. Each step unlocks when the one before it is done.'
+    : 'Read-only. Restart with --allow-control to run tasks from this page.';
+
+  const hasSeeds = o.seeds.cities > 0 && o.seeds.categories > 0;
+  const hasJobs = o.jobsTotal > 0;
+  const hasBusinesses = o.businesses > 0;
+  const hasDomains = (o.domains.pending || 0) + (o.domains.done || 0) > 0;
+  const busy = !!t.running;
+
+  const steps = [
+    {
+      n: 1, title: 'Import your cities and services',
+      why: 'A spreadsheet with one sheet of cities and one of services. Leading zeros on zips are repaired automatically.',
+      satisfied: hasSeeds,
+      status: hasSeeds ? o.seeds.cities + ' cities · ' + o.seeds.categories + ' services' : null,
+      body:
+        '<div class="opts">' +
+        '<label>Cities</label><input type="file" id="up-cities" accept=".xlsx,.csv">' +
+        '<input type="text" id="sheet-cities" placeholder="Sheet name" style="width:120px">' +
+        '<button class="go ghost" id="do-cities">Import cities</button>' +
+        '</div><div class="opts">' +
+        '<label>Services</label><input type="file" id="up-cats" accept=".xlsx,.csv">' +
+        '<input type="text" id="sheet-cats" placeholder="Sheet name" style="width:120px">' +
+        '<button class="go ghost" id="do-cats">Import services</button>' +
+        '</div>',
+    },
+    {
+      n: 2, title: 'Create the job list',
+      why: 'One job per city and service. Costs nothing and starts nothing — it just builds the queue.',
+      blocked: !hasSeeds, satisfied: hasJobs,
+      status: hasJobs ? num(o.jobsTotal) + ' jobs' : null,
+      body:
+        '<div class="opts">' +
+        '<label>Only these cities</label><input type="text" id="p-cities" placeholder="all" style="width:150px">' +
+        '<label>Only these services</label><input type="text" id="p-cats" placeholder="all" style="width:150px">' +
+        '<button class="go" id="do-plan"' + (busy ? ' disabled' : '') + '>Create jobs</button>' +
+        '</div>',
+    },
+    {
+      n: 3, title: 'Collect businesses from Google Maps',
+      why: 'Works through the queue. Safe to stop and restart — it picks up exactly where it left off.',
+      blocked: !hasJobs, satisfied: hasBusinesses,
+      status: hasBusinesses ? num(o.businesses) + ' businesses' : null,
+      body:
+        '<div class="opts">' +
+        '<label>Workers</label><input type="number" id="r-workers" value="4" min="1" max="16">' +
+        '<label>Stop after</label><input type="number" id="r-max" placeholder="all" min="1">' +
+        '<label><input type="checkbox" id="r-headful"> Show browser</label>' +
+        '<button class="go" id="do-run"' + (busy ? ' disabled' : '') + '>Start scraping</button>' +
+        '</div>',
+    },
+    {
+      n: 4, title: 'Find email addresses',
+      why: 'Crawls each business website. Government and education addresses are excluded.',
+      blocked: !hasDomains, satisfied: o.emails.usable > 0,
+      status: o.emails.usable > 0 ? num(o.emails.usable) + ' addresses' : null,
+      body:
+        '<div class="opts">' +
+        '<label>Workers</label><input type="number" id="e-workers" value="8" min="1" max="32">' +
+        '<label>Stop after</label><input type="number" id="e-max" placeholder="all" min="1">' +
+        '<button class="go" id="do-enrich"' + (busy ? ' disabled' : '') + '>Find emails</button>' +
+        '</div>',
+    },
+    {
+      n: 5, title: 'Export your leads',
+      why: 'Writes a CSV of everything new since the last export.',
+      blocked: !hasBusinesses, satisfied: false,
+      body:
+        '<div class="opts">' +
+        '<select id="x-entity"><option value="leads-flat">Leads</option>' +
+        '<option value="businesses">Businesses</option><option value="emails">Emails</option></select>' +
+        '<label><input type="checkbox" id="x-excel"> Excel-safe zips</label>' +
+        '<label><input type="checkbox" id="x-split"> One file per state</label>' +
+        '<label><input type="checkbox" id="x-full"> Export everything again</label>' +
+        '<button class="go" id="do-export"' + (busy ? ' disabled' : '') + '>Export CSV</button>' +
+        '</div>',
+    },
+  ];
+
+  $('#steps').innerHTML = steps.map((s) =>
+    '<div class="step ' + (s.blocked ? 'blocked' : s.satisfied ? 'satisfied' : 'ready') + '">' +
+    '<div class="idx">' + s.n + '</div>' +
+    '<div><h3>' + esc(s.title) + '</h3><p>' + esc(s.why) + '</p>' +
+    (t.enabled && !s.blocked ? s.body : '') + '</div>' +
+    '<div class="label">' + (s.status ? esc(s.status) : s.blocked ? 'waiting' : '') + '</div></div>',
+  ).join('');
+
+  if (t.enabled) wireControls();
+  renderRun();
+}
+
+function renderRun() {
+  const t = ctlState.running;
+  const last = ctlState.tasks[0];
+  const shown = t || last;
+
+  $('#runbar').innerHTML = shown
+    ? '<span class="dot ' + (t ? 'live' : shown.state === 'succeeded' ? 'ok' : shown.state === 'failed' ? 'bad' : '') + '"></span>' +
+      '<span>' + esc(shown.label) + '</span>' +
+      '<span class="label">' + esc(t ? 'running' : shown.state) + '</span>' +
+      (t ? '<button class="go stop" id="do-stop" style="margin-left:auto">Stop</button>' : '')
+    : '<span class="dot"></span><span class="label">nothing running</span>';
+
+  if (t) $('#do-stop').addEventListener('click', async () => {
+    await fetch('/api/tasks/stop', { method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ id: t.id }) });
+    loadControl();
+  });
+
+  const log = $('#log');
+  const atBottom = log.scrollTop + log.clientHeight >= log.scrollHeight - 30;
+  log.textContent = shown && shown.lines.length
+    ? shown.lines.map(readable).join('\n') : 'No output yet.';
+  if (atBottom) log.scrollTop = log.scrollHeight;
+}
+
+/**
+ * Render one output line for a human.
+ *
+ * The child logs structured NDJSON — right for the log file, unreadable in a
+ * panel. Show the message and the few fields that carry meaning, and drop the
+ * envelope. Anything that is not JSON is already human-readable CLI output and
+ * passes through untouched.
+ */
+function readable(line) {
+  if (line[0] !== '{') return line;
+  let e;
+  try { e = JSON.parse(line); } catch { return line; }
+  if (!e.msg) return line;
+
+  const time = e.time ? new Date(e.time).toLocaleTimeString() : '';
+  const detail = ['query', 'domain', 'taskKey', 'found', 'records', 'emails', 'pages', 'reason', 'count']
+    .filter((k) => e[k] !== undefined)
+    .map((k) => k + '=' + e[k])
+    .join(' ');
+  const level = e.level === 'error' || e.level === 'fatal' ? '! '
+    : e.level === 'warn' ? '~ ' : '  ';
+  return time + level + e.msg + (detail ? '  ' + detail : '');
+}
+
+async function startTask(command, options) {
+  const r = await fetch('/api/tasks/start', {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ command, options }),
+  }).then((x) => x.json());
+  if (r.error) { alert(r.error); return; }
+  loadControl();
+}
+
+async function upload(inputId, kind) {
+  const file = $(inputId).files[0];
+  if (!file) { alert('Choose a file first.'); return null; }
+  const r = await fetch('/api/upload?name=' + encodeURIComponent(file.name), {
+    method: 'POST', body: file,
+  }).then((x) => x.json());
+  if (r.error) { alert(r.error); return null; }
+  uploaded[kind] = r.file;
+  return r.file;
+}
+
+function wireControls() {
+  const on = (id, fn) => { const el = $(id); if (el) el.addEventListener('click', fn); };
+
+  on('#do-cities', async () => {
+    const file = await upload('#up-cities', 'cities');
+    if (file) startTask('import-cities', { file, sheet: $('#sheet-cities').value });
+  });
+  on('#do-cats', async () => {
+    const file = await upload('#up-cats', 'categories');
+    if (file) startTask('import-categories', { file, sheet: $('#sheet-cats').value });
+  });
+  on('#do-plan', () => startTask('plan', {
+    cities: $('#p-cities').value, categories: $('#p-cats').value }));
+  on('#do-run', () => startTask('run', {
+    workers: Number($('#r-workers').value), maxJobs: Number($('#r-max').value) || undefined,
+    headful: $('#r-headful').checked }));
+  on('#do-enrich', () => startTask('enrich', {
+    workers: Number($('#e-workers').value), maxDomains: Number($('#e-max').value) || undefined }));
+  on('#do-export', () => startTask('export', {
+    entity: $('#x-entity').value, excelSafe: $('#x-excel').checked,
+    splitByState: $('#x-split').checked, full: $('#x-full').checked }));
+}
+
+// While a task runs, poll often enough that the log feels live.
+setInterval(async () => {
+  if (!$('#control').classList.contains('on')) return;
+  const t = await get('/api/tasks');
+  const wasRunning = !!ctlState.running;
+  ctlState = t;
+  renderRun();
+  // Re-render the steps when a task finishes: counts and unlocks have changed.
+  if (wasRunning && !t.running) { loadControl(); loadOverview(); }
+}, 1500);
 
 // ── Sweep plate ────────────────────────────────────────────────────────
 let plateBy = 'city';

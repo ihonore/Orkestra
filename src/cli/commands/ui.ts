@@ -11,6 +11,8 @@ export interface UiCommandOptions {
   readonly port?: number;
   readonly open?: boolean;
   readonly allowConfigWrite?: boolean;
+  readonly allowControl?: boolean;
+  readonly configFile?: string;
 }
 
 export async function runUi(options: UiCommandOptions): Promise<void> {
@@ -20,20 +22,25 @@ export async function runUi(options: UiCommandOptions): Promise<void> {
     ...(options.allowConfigWrite !== undefined && {
       allowConfigWrite: options.allowConfigWrite,
     }),
+    ...(options.allowControl !== undefined && { allowControl: options.allowControl }),
+    ...(options.configFile !== undefined && { configFile: options.configFile }),
   });
 
   console.log(
     keyValue([
       ['dashboard', server.url],
       ['database', options.config.paths.databaseFile],
+      ['controls', options.allowControl === true ? 'enabled' : 'view only'],
       ['settings', options.allowConfigWrite === true ? 'editable' : 'read-only'],
     ]),
   );
   console.log(
     `\n${symbol.ok} listening on ${style.cyan(server.url)}  ${style.grey('(Ctrl-C to stop)')}`,
   );
-  if (options.allowConfigWrite !== true) {
-    console.log(style.grey('Add --allow-config-write to change settings from the page.'));
+  if (options.allowControl !== true) {
+    console.log(
+      style.grey('This is a viewer. Use `gms ui --control` to run everything from the page.'),
+    );
   }
 
   if (options.open === true) await openBrowser(server.url);

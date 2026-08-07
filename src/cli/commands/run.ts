@@ -131,9 +131,11 @@ export async function runRun(options: RunCommandOptions): Promise<void> {
   });
   shutdown.install();
   shutdown.onShutdown('browser', () => pool.close());
-  shutdown.onShutdown('database', () => {
-    driver.close();
-  });
+  // The database is deliberately NOT closed here. Shutdown tasks run while
+  // workers are still draining, and closing the connection out from under them
+  // makes the final jobs fail with "database connection is not open" — losing
+  // exactly the results the graceful stop existed to preserve. The `finally`
+  // block below closes it once runJobs has actually returned.
 
   /**
    * Run one job.
