@@ -30,7 +30,8 @@
     "boundaries": "depcruise src",
     "test": "vitest run",
     "test:watch": "vitest",
-    "check": "npm run typecheck && npm run lint && npm run boundaries && npm run test"
+    "check": "npm run typecheck && npm run lint && npm run boundaries && npm run test",
+    "postbuild": "node -e \"require('fs').chmodSync('dist/cli/main.js', 0o755)\""
   },
   "dependencies": {
     "better-sqlite3": "^13.0.2",

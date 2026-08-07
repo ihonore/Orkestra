@@ -11,7 +11,17 @@ websites for email addresses, and exports to CSV. Verified end to end on real da
 produced 159 businesses with 100% CID/name fill and zero duplicates; enriching their 108 domains
 produced 74 usable addresses across 47 businesses.
 
-The full pipeline:
+### The short version
+
+```bash
+gms ui --control
+```
+
+Everything — importing your spreadsheet, creating jobs, scraping, finding
+emails, exporting — runs from that page as a numbered sequence, with a live log
+and a stop button. Nothing else needs to be memorised.
+
+### The same thing from the terminal
 
 ```bash
 gms import cities  "your.xlsx" --sheet Cities
@@ -47,12 +57,25 @@ binary and `gms doctor` will say so explicitly rather than failing with a module
 
 ```bash
 npm install
-npm run gms -- init          # write gms.config.yaml and create data/
-npm run gms -- db migrate    # create the database
-npm run gms -- doctor        # verify the environment
+npx playwright install chromium   # the scraper needs a browser
+npm run build                     # compile to dist/
+npm link                          # put `gms` on your PATH
 ```
 
-After `npm run build`, the CLI is available as `gms` and works from any directory.
+Then, from anywhere:
+
+```bash
+gms init          # write gms.config.yaml and create data/
+gms db migrate    # create the database
+gms doctor --all  # verify the environment, browser and proxies
+gms ui --control  # open the dashboard and do everything else there
+```
+
+`npm link` creates a symlink into your global npm bin. To remove it later:
+`npm unlink -g gms`.
+
+**Without installing**, every command also works as `npm run gms -- <command>`
+from the project directory — e.g. `npm run gms -- ui --control`.
 
 ## Commands
 

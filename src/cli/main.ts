@@ -7,6 +7,7 @@
  * `src/config` so the forthcoming HTTP API can expose the same operations
  * without going through argv.
  */
+import { realpathSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 import { Command, InvalidArgumentError, Option } from 'commander';
 import { loadConfig } from '../config/loader.js';
@@ -483,10 +484,37 @@ async function main(): Promise<void> {
   }
 }
 
+/**
+ * Whether this module is the process entry point.
+ *
+ * Resolving the symlink is essential, not defensive. An npm `bin` is installed
+ * as a **symlink**, so when this runs as `gms` the entry is `.../bin/gms` while
+ * `import.meta.url` is the real `.../dist/cli/main.js`. Comparing them
+ * unresolved never matches, and the command silently does nothing — it exits 0
+ * having printed not a word, which is the worst way for a CLI to fail.
+ *
+ * `pathToFileURL` handles Windows drive letters and spaces, which naive
+ * `file://` concatenation does not.
+ *
+ * Exported so this can be tested without building and installing the package.
+ */
+export function isEntryPoint(
+  entry: string | undefined,
+  moduleUrl: string,
+  resolve: (p: string) => string = realpathSync,
+): boolean {
+  if (entry === undefined || entry === '') return false;
+  let resolved = entry;
+  try {
+    resolved = resolve(entry);
+  } catch {
+    // Not a real path (an `-e` eval, a virtual entry): compare what we got.
+  }
+  return pathToFileURL(resolved).href === moduleUrl;
+}
+
 // Run only when invoked directly, so tests can import buildProgram() without
-// the CLI executing. pathToFileURL handles Windows drive letters and spaces,
-// which naive `file://` concatenation does not.
-const entry = process.argv[1];
-if (entry !== undefined && pathToFileURL(entry).href === import.meta.url) {
+// the CLI executing.
+if (isEntryPoint(process.argv[1], import.meta.url)) {
   void main();
 }
