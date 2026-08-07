@@ -801,7 +801,8 @@ async function loadIssues() {
 
   $('#exp-body').innerHTML = exports.length ? exports.map((c) =>
     '<tr><td>' + esc(c.exporter) + '</td><td>' + esc(c.entity) + '</td>' +
-    '<td>' + num(c.last_id) + '</td><td>' + num(c.rows_total) + '</td>' +
+    '<td>' + (c.last_sub_id ? num(c.last_id) + ' / ' + num(c.last_sub_id) : num(c.last_id)) + '</td>' +
+    '<td>' + num(c.rows_total) + '</td>' +
     '<td class="muted">' + esc(c.target) + '</td></tr>').join('')
     : '<tr><td colspan="5" class="empty">Nothing exported yet.</td></tr>';
 }

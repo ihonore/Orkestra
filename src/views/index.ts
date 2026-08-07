@@ -7,6 +7,9 @@
  * is the single most important piece of metadata here.
  */
 import type { SqliteDriver } from '../db/driver/types.js';
+import type { ExportCursor } from '../db/repositories/exports.js';
+
+export type { ExportCursor };
 
 /** How a value must be treated by a destination that guesses types. */
 export type FieldKind = 'text' | 'number' | 'boolean' | 'timestamp' | 'digits';
@@ -62,17 +65,33 @@ export const LEADS_FLAT: RecordSchema = {
   // three rows, which is what a mail-merge wants. Businesses with no email are
   // included with a blank email column rather than dropped — they are still
   // leads, reachable by phone.
-  sql: `
+  //
+  // This view has TWO append-only streams, not one; see {@link readLeadPage}.
+  // `sql` here is the no-email stream, which is what a plain readRows() gets.
+  sql: leadsFlatSql('b.id > :lastId AND be.link_id IS NULL', 'b.id'),
+};
+
+/**
+ * The leads-flat SELECT, parameterized by its WHERE and ORDER BY.
+ *
+ * Non-junk emails come from a subquery rather than an ON-clause filter. Filtered
+ * afterwards, a *junk* link still produces a row with a blank email — so a
+ * business whose addresses were all rejected would appear once per rejected
+ * address, each looking like a business that simply has no email.
+ */
+function leadsFlatSql(where: string, orderBy: string): string {
+  return `
     SELECT
       b.id                                   AS id,
+      COALESCE(be.link_id, 0)                AS sub_id,
       b.id                                   AS business_id,
       b.name                                 AS name,
       b.category_primary                     AS category,
       b.phone_e164                           AS phone,
-      e.address                              AS email,
-      CASE WHEN e.address IS NULL THEN NULL
-           WHEN e.is_role = 1 THEN 'role'
-           WHEN e.is_free = 1 THEN 'free'
+      be.address                             AS email,
+      CASE WHEN be.address IS NULL THEN NULL
+           WHEN be.is_role = 1 THEN 'role'
+           WHEN be.is_free = 1 THEN 'free'
            ELSE 'personal' END               AS email_type,
       be.confidence                          AS email_confidence,
       b.website_url                          AS website,
@@ -89,18 +108,35 @@ export const LEADS_FLAT: RecordSchema = {
       b.cid                                  AS cid,
       b.first_seen_at                        AS first_seen
     FROM businesses b
-    LEFT JOIN business_emails be ON be.business_id = b.id
-    LEFT JOIN emails e ON e.id = be.email_id AND e.is_junk = 0
+    LEFT JOIN (
+      SELECT be.rowid AS link_id, be.business_id, be.confidence,
+             e.address, e.is_role, e.is_free
+        FROM business_emails be
+        JOIN emails e ON e.id = be.email_id
+       WHERE e.is_junk = 0
+    ) be ON be.business_id = b.id
     LEFT JOIN domains d ON d.id = b.domain_id
     LEFT JOIN business_sightings s ON s.id = (
       SELECT id FROM business_sightings WHERE business_id = b.id ORDER BY id LIMIT 1
     )
     LEFT JOIN cities seed_city ON seed_city.id = s.seed_city_id
     LEFT JOIN categories seed_cat ON seed_cat.id = s.seed_category_id
-    WHERE b.id > :lastId
-    ORDER BY b.id
-    LIMIT :limit`,
-};
+    WHERE ${where}
+    ORDER BY ${orderBy}
+    LIMIT :limit`;
+}
+
+/** Businesses with no usable email yet. Cursor: `businesses.id`. */
+const LEADS_NO_EMAIL = leadsFlatSql('b.id > :lastId AND be.link_id IS NULL', 'b.id');
+
+/**
+ * Every email link. Cursor: `business_emails.rowid`, which is unique per row.
+ *
+ * Deliberately NOT restricted to new businesses: an address found by enrichment
+ * for a business exported last week is new information and must still be
+ * exported. Missing that is what the single-cursor design got wrong.
+ */
+const LEADS_WITH_EMAIL = leadsFlatSql('be.link_id > :lastSubId', 'be.link_id');
 
 export const BUSINESSES: RecordSchema = {
   entity: 'businesses',
@@ -188,4 +224,111 @@ export function readRows(
   limit: number,
 ): (ExportRow & { id: number })[] {
   return driver.prepare<ExportRow & { id: number }>(schema.sql).all({ lastId, limit });
+}
+
+export interface Page {
+  readonly rows: (ExportRow & { id: number })[];
+  readonly next: ExportCursor;
+  /** True when the view has nothing left beyond `next`. */
+  readonly done: boolean;
+}
+
+/** Row shape of the leads streams, which carry a second cursor column. */
+type LeadRow = ExportRow & { id: number; sub_id: number };
+
+/**
+ * Read one page of `leads-flat`.
+ *
+ * The view's grain is (business, email), so a single `businesses.id` watermark
+ * cannot describe it — two rows share an id, and an email discovered later has
+ * an id already behind the mark. Instead there are two streams, each with a
+ * genuinely unique, monotone cursor:
+ *
+ *  - **email links**, keyed on `business_emails.rowid`. Covers every address,
+ *    including ones enrichment finds long after the business was exported.
+ *  - **businesses with no email yet**, keyed on `businesses.id`. These are still
+ *    leads — reachable by phone — so they are not dropped.
+ *
+ * A business exported blank that later gains an address appears a second time,
+ * with the address. That is a new fact rather than a duplicate, and it is the
+ * behaviour that makes running an export repeatedly actually work.
+ */
+export function readLeadPage(driver: SqliteDriver, cursor: ExportCursor, limit: number): Page {
+  // Emails first: they are the point of the export, and this stream also
+  // catches up on anything enrichment added since the last run.
+  const withEmail = driver
+    .prepare<LeadRow>(LEADS_WITH_EMAIL)
+    .all({ lastSubId: cursor.lastSubId, limit });
+
+  if (withEmail.length > 0) {
+    return {
+      rows: withEmail,
+      next: { lastId: cursor.lastId, lastSubId: withEmail.at(-1)!.sub_id },
+      done: false,
+    };
+  }
+
+  const noEmail = driver.prepare<LeadRow>(LEADS_NO_EMAIL).all({ lastId: cursor.lastId, limit });
+
+  return {
+    rows: noEmail,
+    next: {
+      lastId: noEmail.length > 0 ? noEmail.at(-1)!.id : cursor.lastId,
+      lastSubId: cursor.lastSubId,
+    },
+    done: noEmail.length === 0,
+  };
+}
+
+/**
+ * Read one page of any view.
+ *
+ * Every exporter goes through this rather than paging itself, so a view with an
+ * unusual cursor is handled in exactly one place. Before this existed, CSV and
+ * Sheets each ran their own `id > lastId` loop and both inherited the same bug.
+ */
+export function readPage(
+  driver: SqliteDriver,
+  schema: RecordSchema,
+  cursor: ExportCursor,
+  limit: number,
+): Page {
+  if (schema.entity === LEADS_FLAT.entity) return readLeadPage(driver, cursor, limit);
+
+  const rows = readRows(driver, schema, cursor.lastId, limit);
+  return {
+    rows,
+    next: { lastId: rows.at(-1)?.id ?? cursor.lastId, lastSubId: cursor.lastSubId },
+    done: rows.length === 0,
+  };
+}
+
+/** Count the rows a SELECT would return, ignoring its LIMIT. */
+function countOf(driver: SqliteDriver, sql: string, params: Record<string, number>): number {
+  // The parameter must go too, not just the clause: better-sqlite3 rejects a
+  // named parameter the statement does not mention.
+  const unlimited = sql.replace('LIMIT :limit', '');
+  return (
+    driver.prepare<{ n: number }>(`SELECT COUNT(*) AS n FROM (${unlimited})`).get(params)?.n ?? 0
+  );
+}
+
+/**
+ * How many rows a view still owes beyond `cursor`.
+ *
+ * Uses the same SQL the reader uses, so the number shown before an export and
+ * the number of rows that actually arrive cannot disagree.
+ */
+export function countRemaining(
+  driver: SqliteDriver,
+  schema: RecordSchema,
+  cursor: ExportCursor,
+): number {
+  if (schema.entity === LEADS_FLAT.entity) {
+    return (
+      countOf(driver, LEADS_WITH_EMAIL, { lastSubId: cursor.lastSubId }) +
+      countOf(driver, LEADS_NO_EMAIL, { lastId: cursor.lastId })
+    );
+  }
+  return countOf(driver, schema.sql, { lastId: cursor.lastId });
 }

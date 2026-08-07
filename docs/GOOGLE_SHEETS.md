@@ -87,7 +87,21 @@ gms export sheets
 
 Or from the dashboard: `gms ui --control`, then **step 6**.
 
-Run it as often as you like. It only ever sends rows added since last time.
+Run it as often as you like. It only ever sends what is new since last time.
+
+### Why a business can appear twice
+
+The sheet has one row per **email address**, because that is what a mail merge
+needs — a firm with three addresses is three rows.
+
+Addresses are found *after* the businesses are: `gms run` collects the listings,
+`gms enrich emails` visits their websites. So a business often reaches the sheet
+before its address does, on a row with the email column blank. When the address
+turns up, the business appears again, this time with it.
+
+That second row is new information, not a duplicate. If you only want the
+reachable ones, sort or filter the sheet by the email column. The `business_id`
+column is stable, so rows for the same business always share it.
 
 ---
 

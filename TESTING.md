@@ -605,12 +605,52 @@ gms export sheets --entity leads-flat
 # Export again (should be a no-op)
 gms export sheets --entity leads-flat
 
-# Verify cursor didn't advance
-sqlite3 data/gms.sqlite "SELECT last_id FROM export_cursors WHERE exporter='sheets';"
+# Verify neither watermark advanced
+sqlite3 data/gms.sqlite \
+  "SELECT last_id, last_sub_id FROM export_cursors WHERE exporter='sheets';"
 # Should be unchanged
 
-# The second export should print: "0 rows exported" (nothing new to write)
+# The second export prints: "Nothing new — the sheet already has every row."
 ```
+
+### Emails found after a business was exported
+
+This is the one that matters most, because it is the normal order of work:
+`gms run` collects businesses, and `gms enrich emails` finds their addresses
+afterwards. Those addresses belong to businesses that were already exported.
+
+```bash
+gms export csv --entity leads-flat        # businesses, most without emails yet
+gms enrich emails                          # addresses arrive now
+gms export csv --entity leads-flat        # must send the new addresses
+```
+
+The third command must NOT say "nothing new". `leads-flat` has one row per
+(business, email), so it is paged by two watermarks: `last_id` over businesses
+that still have no address, and `last_sub_id` over email links. The second one
+is not restricted to recent businesses, which is what lets a late address reach
+the export at all.
+
+A business exported with a blank email column, that later gains an address,
+therefore appears a second time — once blank, once with the address. That is a
+new fact rather than a duplicate. Sort or filter the sheet by email if you want
+only the reachable ones.
+
+```bash
+# What is still owed, per exporter
+gms export status
+
+# Under the hood: a business with several addresses is several rows
+sqlite3 data/gms.sqlite "
+  SELECT b.name, COUNT(*) FROM businesses b
+    JOIN business_emails be ON be.business_id = b.id
+    JOIN emails e ON e.id = be.email_id AND e.is_junk = 0
+   GROUP BY b.id HAVING COUNT(*) > 1;"
+```
+
+Every export ends by comparing what it wrote against what it counted as pending
+beforehand, and fails loudly if they disagree — a short export is reported, not
+silently accepted.
 
 ### Network resilience
 
@@ -640,6 +680,8 @@ sqlite3 data/gms.sqlite "SELECT last_id FROM export_cursors WHERE exporter='shee
 **Failure modes:**
 - Zips appear as numbers (01234 becomes 1234) → `valueInputOption` not set to RAW
 - Duplicate rows in Sheets after re-export → cursor not advancing
+- "Nothing new" after enrichment found addresses → the sub-cursor is not being
+  advanced or stored; check `last_sub_id` in `export_cursors`
 - "429 quota exceeded" after 1000 rows → batching not working (should do 60/min, not 300/min)
 - CSV won't open in Excel → line endings not normalized (have CRLF, not LF)
 

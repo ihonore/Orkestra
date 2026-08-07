@@ -175,6 +175,33 @@ describe('split-by grouping', () => {
   });
 });
 
+describe('--full replaces the file', () => {
+  it('does not leave two copies of every row', () => {
+    // The cursor restarts, so the file must too. Appending would silently
+    // double the list, and a CSV has no way to say it started over midway.
+    const file = path.join(tempDir(), 'out.csv');
+    new CsvWriter(file, SCHEMA).write([{ name: 'first', zip: '01', rating: 1 }]);
+    new CsvWriter(file, SCHEMA, { replace: true }).write([
+      { name: 'second', zip: '02', rating: 2 },
+    ]);
+
+    const lines = fs.readFileSync(file, 'utf8').trim().split('\n');
+    expect(lines).toHaveLength(2); // header + one row
+    expect(lines[1]).toContain('second');
+    expect(lines[1]).not.toContain('first');
+  });
+
+  it('leaves a file alone when the writer never writes', () => {
+    // --split-by creates a writer per group; a group with no rows this run must
+    // not wipe what an earlier run put there.
+    const file = path.join(tempDir(), 'out.csv');
+    new CsvWriter(file, SCHEMA).write([{ name: 'kept', zip: '01', rating: 1 }]);
+    new CsvWriter(file, SCHEMA, { replace: true }).write([]);
+
+    expect(fs.readFileSync(file, 'utf8')).toContain('kept');
+  });
+});
+
 describe('export cursors', () => {
   function fresh(): ExportsRepository {
     const driver = openDatabase({ file: path.join(tempDir(), 'x.sqlite') });
@@ -188,8 +215,8 @@ describe('export cursors', () => {
 
   it('advances and accumulates a row total', () => {
     const cursors = fresh();
-    cursors.advance('csv', '/tmp/x', 'leads-flat', 100, 100);
-    cursors.advance('csv', '/tmp/x', 'leads-flat', 250, 150);
+    cursors.advance('csv', '/tmp/x', 'leads-flat', { lastId: 100, lastSubId: 0 }, 100);
+    cursors.advance('csv', '/tmp/x', 'leads-flat', { lastId: 250, lastSubId: 0 }, 150);
 
     expect(cursors.lastId('csv', '/tmp/x', 'leads-flat')).toBe(250);
     expect(cursors.position('csv', '/tmp/x', 'leads-flat')?.rows_total).toBe(250);
@@ -199,14 +226,14 @@ describe('export cursors', () => {
     // Two exporters running at once must not let a slower one reset the
     // watermark and re-export everything the faster one already wrote.
     const cursors = fresh();
-    cursors.advance('csv', '/tmp/x', 'leads-flat', 500, 500);
-    cursors.advance('csv', '/tmp/x', 'leads-flat', 100, 0);
+    cursors.advance('csv', '/tmp/x', 'leads-flat', { lastId: 500, lastSubId: 0 }, 500);
+    cursors.advance('csv', '/tmp/x', 'leads-flat', { lastId: 100, lastSubId: 0 }, 0);
     expect(cursors.lastId('csv', '/tmp/x', 'leads-flat')).toBe(500);
   });
 
   it('keeps targets and entities independent', () => {
     const cursors = fresh();
-    cursors.advance('csv', '/tmp/a', 'leads-flat', 100, 100);
+    cursors.advance('csv', '/tmp/a', 'leads-flat', { lastId: 100, lastSubId: 0 }, 100);
 
     expect(cursors.lastId('csv', '/tmp/b', 'leads-flat')).toBe(0);
     expect(cursors.lastId('csv', '/tmp/a', 'emails')).toBe(0);
@@ -215,7 +242,7 @@ describe('export cursors', () => {
 
   it('resets for a full re-export', () => {
     const cursors = fresh();
-    cursors.advance('csv', '/tmp/x', 'leads-flat', 100, 100);
+    cursors.advance('csv', '/tmp/x', 'leads-flat', { lastId: 100, lastSubId: 0 }, 100);
     cursors.reset('csv', '/tmp/x', 'leads-flat');
     expect(cursors.lastId('csv', '/tmp/x', 'leads-flat')).toBe(0);
   });

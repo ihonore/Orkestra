@@ -42,6 +42,14 @@ export interface CsvOptions {
   /** Line ending. Always explicit — never platform-dependent. */
   readonly newline?: '\n' | '\r\n';
   readonly delimiter?: ',';
+  /**
+   * Replace the file rather than appending to it.
+   *
+   * Set by `--full`, which means "export everything from the beginning".
+   * Appending there would leave the file holding two copies of every row —
+   * silently, since a CSV has no way to signal that it restarted partway down.
+   */
+  readonly replace?: boolean;
 }
 
 /**
@@ -113,6 +121,7 @@ export function formatHeader(schema: RecordSchema, options: CsvOptions = {}): st
 export class CsvWriter {
   readonly #newline: string;
   #created: boolean;
+  #replace: boolean;
 
   constructor(
     readonly file: string,
@@ -120,7 +129,8 @@ export class CsvWriter {
     private readonly options: CsvOptions = {},
   ) {
     this.#newline = options.newline ?? '\n';
-    this.#created = fs.existsSync(file) && fs.statSync(file).size > 0;
+    this.#replace = options.replace === true;
+    this.#created = !this.#replace && fs.existsSync(file) && fs.statSync(file).size > 0;
     fs.mkdirSync(path.dirname(file), { recursive: true });
   }
 
@@ -133,6 +143,13 @@ export class CsvWriter {
 
     const lines: string[] = [];
     if (!this.#created) {
+      // Blank an existing file here rather than in the constructor: a writer
+      // that is created but never written to must not destroy last week's
+      // export, which is what `--split-by` does whenever a group has no rows.
+      if (this.#replace) {
+        fs.writeFileSync(this.file, '', 'utf8');
+        this.#replace = false;
+      }
       // The BOM goes before the header and only on creation, or it would appear
       // mid-file on every append.
       const prefix = this.options.bom === true ? '\uFEFF' : '';

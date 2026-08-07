@@ -1,0 +1,18 @@
+-- A second watermark for views whose grain is not one row per business.
+--
+-- `leads-flat` emits one row per (business, email). Keying its cursor on
+-- `businesses.id` alone was wrong in two ways, both silent:
+--
+--   1. Emails found *after* a business was exported sit behind the watermark
+--      forever. The normal pipeline order is `gms run` then `gms enrich emails`,
+--      so this was the common case, not an edge case: the export would report
+--      "up to date" while addresses sat unreachable in SQLite.
+--
+--   2. A business with several emails straddling a page boundary lost its
+--      remaining rows, because the next page asked for `id > lastId` and that
+--      business's id was no longer greater.
+--
+-- The fix is two independently monotone streams — new businesses by
+-- `businesses.id`, and new email links by `business_emails.rowid` — so this
+-- column records how far the second one has reached.
+ALTER TABLE export_cursors ADD COLUMN last_sub_id INTEGER NOT NULL DEFAULT 0;

@@ -7,6 +7,7 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
+import vm from 'node:vm';
 import { afterEach, describe, expect, it } from 'vitest';
 import { loadConfig } from '../src/config/loader.js';
 import { openDatabase } from '../src/db/client.js';
@@ -221,6 +222,16 @@ describe('page document', () => {
 
   it('routes on hashchange, so back and forward work', () => {
     expect(PAGE).toContain("addEventListener('hashchange'");
+  });
+
+  it('ships a script that actually parses', () => {
+    // The whole dashboard is one inline script inside a template literal, so a
+    // stray bracket or an unescaped backtick produces a page that loads, looks
+    // fine, and does nothing — with the error only in the browser console.
+    // vm.Script compiles without running, which is exactly the check.
+    const script = /<script>([\s\S]*?)<\/script>/.exec(PAGE)?.[1];
+    expect(script).toBeDefined();
+    expect(() => new vm.Script(script as string)).not.toThrow();
   });
 });
 

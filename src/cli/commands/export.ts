@@ -14,7 +14,13 @@ import { openDatabaseFromConfig } from '../../db/client.js';
 import { ExportsRepository } from '../../db/repositories/exports.js';
 import { CsvWriter, groupKeyFor } from '../../exporters/csv.js';
 import { SheetsExporter, estimateMinutes } from '../../exporters/sheets.js';
-import { VIEWS, readRows, type ExportRow } from '../../views/index.js';
+import {
+  VIEWS,
+  countRemaining,
+  readPage,
+  type ExportCursor,
+  type ExportRow,
+} from '../../views/index.js';
 import { formatBytes, heading, keyValue, style, symbol } from '../output.js';
 import fs from 'node:fs';
 
@@ -52,19 +58,23 @@ export function runExportCsv(options: ExportCsvOptions): void {
   try {
     if (options.full === true) cursors.reset('csv', target, entity);
 
-    const startId = cursors.lastId('csv', target, entity);
+    const start = cursors.cursor('csv', target, entity);
+    const pending = countRemaining(driver, schema, start);
     const writers = new Map<string, CsvWriter>();
     const csvOptions = {
       excelSafeText: options.excelSafe === true,
       bom: options.bom !== false,
       newline: options.crlf === true ? ('\r\n' as const) : ('\n' as const),
+      // --full starts the cursor over, so the file must start over too.
+      replace: options.full === true,
     };
 
-    let lastId = startId;
+    let cursor = start;
     let written = 0;
 
     for (;;) {
-      const rows = readRows(driver, schema, lastId, PAGE_SIZE);
+      const page = readPage(driver, schema, cursor, PAGE_SIZE);
+      const rows = page.rows;
       if (rows.length === 0) break;
 
       // Group first, then write once per file: appending per row would reopen
@@ -91,13 +101,27 @@ export function runExportCsv(options: ExportCsvOptions): void {
         written += writer.write(groupRows);
       }
 
-      lastId = rows.at(-1)?.id ?? lastId;
+      cursor = page.next;
 
       // Advance only after the rows are on disk. A crash here re-exports this
       // page next time, which is far better than skipping it.
-      cursors.advance('csv', target, entity, lastId, rows.length);
+      cursors.advance('csv', target, entity, cursor, rows.length);
 
-      if (rows.length < PAGE_SIZE) break;
+      if (page.done) break;
+    }
+
+    // A view with two streams pages until both are drained, so "fewer rows than
+    // asked for" no longer means "finished". Checking written against the count
+    // taken up front turns any future paging mistake into a loud failure rather
+    // than a quietly short export.
+    if (written !== pending) {
+      throw new AppError(
+        `Exported ${written.toLocaleString()} row(s) but ${pending.toLocaleString()} were pending.`,
+        {
+          code: 'EXPORT_INCOMPLETE',
+          hint: 'The rows are safe in the database — the cursor is what is wrong. Please report this.',
+        },
+      );
     }
 
     const files = [...writers.keys()].map((file) => ({
@@ -106,15 +130,15 @@ export function runExportCsv(options: ExportCsvOptions): void {
     }));
 
     if (options.json === true) {
-      console.log(JSON.stringify({ entity, written, lastId, files }, null, 2));
+      console.log(JSON.stringify({ entity, written, cursor, files }, null, 2));
       return;
     }
 
     if (written === 0) {
       console.log(
         style.grey(
-          startId > 0
-            ? `Nothing new to export — cursor is at ${startId}. Use --full to re-export.`
+          start.lastId > 0 || start.lastSubId > 0
+            ? 'Nothing new to export — everything is already written. Use --full to re-export.'
             : 'Nothing to export yet. Run `gms run` first.',
         ),
       );
@@ -126,7 +150,7 @@ export function runExportCsv(options: ExportCsvOptions): void {
       keyValue([
         ['entity', entity],
         ['rows', written.toLocaleString()],
-        ['cursor', `${startId} -> ${lastId}`],
+        ['cursor', describeCursor(start, cursor)],
       ]),
     );
 
@@ -193,7 +217,7 @@ export async function runExportSheets(options: ExportSheetsOptions): Promise<voi
 
   try {
     if (options.full === true) cursors.reset('sheets', spreadsheetId, entity);
-    const startId = cursors.lastId('sheets', spreadsheetId, entity);
+    const start = cursors.cursor('sheets', spreadsheetId, entity);
 
     const exporter = new SheetsExporter({
       spreadsheetId,
@@ -205,13 +229,13 @@ export async function runExportSheets(options: ExportSheetsOptions): Promise<voi
     });
 
     const room = await exporter.prepare(schema);
-    const pending = countPending(driver, schema, startId);
+    const pending = countRemaining(driver, schema, start);
 
     if (pending === 0) {
       console.log(
         style.grey(
-          startId > 0
-            ? `Nothing new — the sheet is up to date at row ${startId}.`
+          start.lastId > 0 || start.lastSubId > 0
+            ? 'Nothing new — the sheet already has every row.'
             : 'Nothing to export yet. Collect some businesses first.',
         ),
       );
@@ -249,13 +273,14 @@ export async function runExportSheets(options: ExportSheetsOptions): Promise<voi
       ]),
     );
 
-    let lastId = startId;
+    let cursor = start;
     let written = 0;
     let requests = 0;
     let retries = 0;
 
     for (;;) {
-      const rows = readRows(driver, schema, lastId, PAGE_SIZE);
+      const page = readPage(driver, schema, cursor, PAGE_SIZE);
+      const rows = page.rows;
       if (rows.length === 0) break;
 
       const result = await exporter.append(rows, schema);
@@ -263,15 +288,27 @@ export async function runExportSheets(options: ExportSheetsOptions): Promise<voi
       requests += result.requests;
       retries += result.retries;
 
-      lastId = rows.at(-1)?.id ?? lastId;
+      cursor = page.next;
       // Only after Sheets confirmed the write.
-      cursors.advance('sheets', spreadsheetId, entity, lastId, rows.length);
+      cursors.advance('sheets', spreadsheetId, entity, cursor, rows.length);
 
-      if (rows.length < PAGE_SIZE) break;
+      if (page.done) break;
+    }
+
+    if (written !== pending) {
+      throw new AppError(
+        `Sent ${written.toLocaleString()} row(s) but ${pending.toLocaleString()} were pending.`,
+        {
+          code: 'EXPORT_INCOMPLETE',
+          hint:
+            'The rows are safe in the database and the sheet has what was sent.\n' +
+            'Re-running is safe; if the count is still short, please report this.',
+        },
+      );
     }
 
     if (options.json === true) {
-      console.log(JSON.stringify({ entity, written, requests, retries, lastId }, null, 2));
+      console.log(JSON.stringify({ entity, written, requests, retries, cursor }, null, 2));
       return;
     }
 
@@ -281,7 +318,7 @@ export async function runExportSheets(options: ExportSheetsOptions): Promise<voi
         ['rows', written.toLocaleString()],
         ['api requests', String(requests)],
         ['retries', String(retries)],
-        ['cursor', `${startId} -> ${lastId}`],
+        ['cursor', describeCursor(start, cursor)],
       ]),
     );
     console.log(
@@ -293,18 +330,11 @@ export async function runExportSheets(options: ExportSheetsOptions): Promise<voi
   }
 }
 
-/** How many rows a view would yield beyond the cursor. */
-function countPending(
-  driver: ReturnType<typeof openDatabaseFromConfig>,
-  schema: (typeof VIEWS)[string],
-  lastId: number,
-): number {
-  // Wrapping the view keeps one definition of what a row is.
-  const sql = schema.sql.replace(/LIMIT :limit/, 'LIMIT -1');
-  return (
-    driver.prepare<{ n: number }>(`SELECT COUNT(*) AS n FROM (${sql})`).get({ lastId, limit: -1 })
-      ?.n ?? 0
-  );
+/** Human-readable "where we were -> where we are", hiding the sub-cursor when unused. */
+function describeCursor(from: ExportCursor, to: ExportCursor): string {
+  const show = (c: ExportCursor): string =>
+    c.lastSubId > 0 || from.lastSubId > 0 ? `${c.lastId}/${c.lastSubId}` : String(c.lastId);
+  return `${show(from)} -> ${show(to)}`;
 }
 
 /** `gms export status` — where each exporter has reached. */
@@ -324,9 +354,13 @@ export function runExportStatus(options: { config: ResolvedConfig; json?: boolea
 
     console.log(heading('Export cursors'));
     for (const cursor of cursors) {
+      // leads-flat has a second watermark; show it only where it is used, so
+      // the common single-cursor case stays readable.
+      const at =
+        cursor.last_sub_id > 0 ? `${cursor.last_id}/${cursor.last_sub_id}` : String(cursor.last_id);
       console.log(
         `  ${style.bold(cursor.exporter.padEnd(8))} ${cursor.entity.padEnd(12)} ` +
-          `id ${String(cursor.last_id).padStart(8)}  ${String(cursor.rows_total).padStart(8)} rows  ` +
+          `at ${at.padStart(10)}  ${String(cursor.rows_total).padStart(8)} rows  ` +
           style.grey(displayPath(cursor.target)),
       );
     }
