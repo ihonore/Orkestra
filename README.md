@@ -6,8 +6,28 @@ underneath it is automation-agnostic by design.
 This replaces an RTILA workflow that was backed by a Google Sheet and a public Apps Script proxy.
 The architecture and full roadmap live in `docs/ARCHITECTURE.md`.
 
-**Status: M0 (Foundation) complete.** Config, logging, database, migrations and the CLI skeleton are
-production-ready. There is no scraper yet — that arrives in M3.
+**Status: usable.** M0–M5 are complete: the scraper runs against live Google Maps, crawls business
+websites for email addresses, and exports to CSV. Verified end to end on real data — 2 search jobs
+produced 159 businesses with 100% CID/name fill and zero duplicates; enriching their 108 domains
+produced 74 usable addresses across 47 businesses.
+
+The full pipeline:
+
+```bash
+gms import cities  "your.xlsx" --sheet Cities
+gms import categories "your.xlsx" --sheet Services
+gms plan                       # 185 x 85 = 15,725 jobs
+gms run --workers 4            # scrape Google Maps
+gms enrich emails --workers 8  # crawl websites for addresses
+gms export csv                 # leads-flat.csv
+```
+
+### A note on exporting to Excel
+
+A CSV file has no types, so **quoting does not preserve a leading zero** — Excel re-guesses on open
+and turns `02108` into `2108`. Two things actually work: pass `--excel-safe` (writes `="02108"`,
+which only Excel reads correctly), or open via Excel's import wizard with the column set to Text.
+The default is a clean, portable file.
 
 ---
 
@@ -45,6 +65,14 @@ After `npm run build`, the CLI is available as `gms` and works from any director
 | `gms db status [--json]` | Database and migration state |
 | `gms db check` | Full integrity check |
 | `gms db vacuum` | Compact and reclaim free pages |
+| `gms import cities\|categories <file>` | Load seed data from xlsx/CSV |
+| `gms plan` | Create jobs from seeds (idempotent) |
+| `gms run` | Scrape Google Maps into the database |
+| `gms enrich emails` | Crawl business websites for contact addresses |
+| `gms status [--by city\|category\|state]` | Queue progress, per-group breakdown |
+| `gms jobs list\|retry` | Inspect and steer individual jobs |
+| `gms export csv [--entity ...]` | Export results, resuming from the last position |
+| `gms export status` | Where each exporter has reached |
 | `gms db backup <path>` | Consistent copy, safe while the database is in use |
 
 ## Configuration

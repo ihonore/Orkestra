@@ -17,6 +17,7 @@ import { runConfigShow } from './commands/config.js';
 import { runDbBackup, runDbCheck, runDbMigrate, runDbStatus, runDbVacuum } from './commands/db.js';
 import { runDoctor } from './commands/doctor.js';
 import { runEnrichEmails } from './commands/enrich.js';
+import { runExportCsv, runExportStatus } from './commands/export.js';
 import { runImportCategories, runImportCities, runListSheets } from './commands/import.js';
 import { runInit } from './commands/init.js';
 import { runPlan } from './commands/plan.js';
@@ -357,6 +358,54 @@ export function buildProgram(): Command {
         ...(options.status !== undefined && { status: options.status }),
         ...(ids.length > 0 && { ids: ids.map((id) => Number.parseInt(id, 10)) }),
       });
+    });
+
+  const exportCmd = program.command('export').description('write results out');
+  exportCmd
+    .command('csv')
+    .description('export to CSV, resuming from the last position')
+    .addOption(
+      new Option('-e, --entity <name>', 'what to export')
+        .choices(['leads-flat', 'businesses', 'emails'])
+        .default('leads-flat'),
+    )
+    .option('-o, --out-dir <path>', 'output directory (default: dataDir/exports)')
+    .option('--full', 're-export everything, ignoring the cursor', false)
+    .option('--split-by <column>', 'one file per value, e.g. state')
+    .option('--excel-safe', 'wrap zips/phones as ="01234" so Excel keeps leading zeros', false)
+    .option('--no-bom', 'omit the UTF-8 byte-order mark')
+    .option('--crlf', 'use Windows line endings', false)
+    .option('--json', 'emit machine-readable output', false)
+    .action(
+      (options: {
+        entity: string;
+        outDir?: string;
+        full: boolean;
+        splitBy?: string;
+        excelSafe: boolean;
+        bom: boolean;
+        crlf: boolean;
+        json: boolean;
+      }) => {
+        runExportCsv({
+          config: configFrom(program),
+          entity: options.entity,
+          ...(options.outDir !== undefined && { outDir: options.outDir }),
+          full: options.full,
+          ...(options.splitBy !== undefined && { splitBy: options.splitBy }),
+          excelSafe: options.excelSafe,
+          bom: options.bom,
+          crlf: options.crlf,
+          json: options.json,
+        });
+      },
+    );
+  exportCmd
+    .command('status')
+    .description('show how far each exporter has reached')
+    .option('--json', 'emit machine-readable output', false)
+    .action((options: { json: boolean }) => {
+      runExportStatus({ config: configFrom(program), json: options.json });
     });
 
   const db = program.command('db').description('database maintenance');
