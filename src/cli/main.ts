@@ -18,6 +18,7 @@ import { runDbBackup, runDbCheck, runDbMigrate, runDbStatus, runDbVacuum } from 
 import { runDoctor } from './commands/doctor.js';
 import { runEnrichEmails } from './commands/enrich.js';
 import { runExportCsv, runExportStatus } from './commands/export.js';
+import { runUi } from './commands/ui.js';
 import { runImportCategories, runImportCities, runListSheets } from './commands/import.js';
 import { runInit } from './commands/init.js';
 import { runPlan } from './commands/plan.js';
@@ -357,6 +358,21 @@ export function buildProgram(): Command {
         ...(options.automation !== undefined && { automationId: options.automation }),
         ...(options.status !== undefined && { status: options.status }),
         ...(ids.length > 0 && { ids: ids.map((id) => Number.parseInt(id, 10)) }),
+      });
+    });
+
+  program
+    .command('ui')
+    .description('open the local dashboard')
+    .option('-p, --port <n>', 'port to listen on', toInt, 4600)
+    .option('--open', 'open a browser window', false)
+    .option('--allow-config-write', 'let the page edit gms.config.local.yaml', false)
+    .action(async (options: { port: number; open: boolean; allowConfigWrite: boolean }) => {
+      await runUi({
+        config: configFrom(program),
+        port: options.port,
+        open: options.open,
+        allowConfigWrite: options.allowConfigWrite,
       });
     });
 
