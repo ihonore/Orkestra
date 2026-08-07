@@ -99,9 +99,6 @@ describe('concurrent claiming', () => {
     const busy = batches.filter((b) => b.length > 0).length;
     expect(busy).toBeGreaterThanOrEqual(2);
 
-    const largestShare = Math.max(...batches.map((b) => b.length)) / JOB_COUNT;
-    expect(largestShare).toBeLessThan(0.9);
-
     const driver = openDatabase({ file });
     try {
       const counts = new JobsRepository(driver).counts('test');

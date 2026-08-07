@@ -6,7 +6,8 @@
     // so eslint's no-restricted-globals forbids them by default — each genuine
     // browser-side callback disables it explicitly, which keeps every crossing
     // of the Node/browser boundary visible and greppable.
-    "lib": ["ES2023", "DOM"],
+    // DOM.Iterable too, so a NodeList can be spread inside evaluate callbacks.
+    "lib": ["ES2023", "DOM", "DOM.Iterable"],
     "module": "NodeNext",
     "moduleResolution": "NodeNext",
     "types": ["node"],

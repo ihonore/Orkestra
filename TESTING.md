@@ -223,6 +223,43 @@ npm run gms -- status
 
 ---
 
+## M2 / M3 — measured actuals (✓ complete)
+
+Verified against **live Google Maps**, not fixtures.
+
+| Check | Result |
+|---|---|
+| Live run | 2 jobs → 164 listings → 159 businesses |
+| Feed harvest | 48 and 116 listings; second hit `end-of-list` at 47 rounds |
+| CID fill | 159/159 (100%) |
+| Name fill | 159/159 (100%) |
+| Address fill | 158/159 (99.4%) |
+| Phone fill | 155/159 (97.5%) |
+| Website fill | 149/159 (93.7%) |
+| Duplicate CIDs | **0** |
+| Businesses merged across both searches | 5 |
+| Websites pointing at google.com | 1 (a genuine Google Sites business, correctly skipped) |
+| Domains queued for M4 | 108 pending, 2 social skipped |
+| Tests | 273 passing |
+
+Reproduce:
+
+```bash
+gms run --max-jobs 2 --workers 1
+sqlite3 data/gms.sqlite "SELECT name, phone_e164, city, website_url FROM businesses LIMIT 5;"
+```
+
+Integrity queries that must all return 0:
+
+```bash
+sqlite3 data/gms.sqlite "
+SELECT COUNT(*) FROM (SELECT cid FROM businesses WHERE cid IS NOT NULL GROUP BY cid HAVING COUNT(*)>1);
+SELECT COUNT(*) FROM businesses WHERE typeof(cid) <> 'text' AND cid IS NOT NULL;
+SELECT COUNT(*) FROM businesses WHERE website_url LIKE '%/url?q=%';"
+```
+
+---
+
 ## M2 — Browser Engine + Proxies
 
 **Pass criteria:**

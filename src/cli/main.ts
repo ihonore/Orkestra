@@ -19,6 +19,7 @@ import { runDoctor } from './commands/doctor.js';
 import { runImportCategories, runImportCities, runListSheets } from './commands/import.js';
 import { runInit } from './commands/init.js';
 import { runPlan } from './commands/plan.js';
+import { runRun } from './commands/run.js';
 import { runJobsList, runJobsRetry, runStatus } from './commands/status.js';
 import { style, symbol } from './output.js';
 import type { JobStatus } from '../db/repositories/jobs.js';
@@ -232,6 +233,33 @@ export function buildProgram(): Command {
           ...(options.categories !== undefined && { categories: splitList(options.categories) }),
           ...(options.limit !== undefined && { limit: options.limit }),
           dryRun: options.dryRun,
+          json: options.json,
+        });
+      },
+    );
+
+  program
+    .command('run')
+    .description('execute queued jobs')
+    .option('-a, --automation <id>', 'automation id', 'google-maps')
+    .option('-w, --workers <n>', 'concurrent browser workers', toInt)
+    .option('-n, --max-jobs <n>', 'stop after this many jobs', toInt)
+    .option('--headful', 'show the browser window', false)
+    .option('--json', 'emit machine-readable output', false)
+    .action(
+      async (options: {
+        automation: string;
+        workers?: number;
+        maxJobs?: number;
+        headful: boolean;
+        json: boolean;
+      }) => {
+        await runRun({
+          config: configFrom(program),
+          automationId: options.automation,
+          ...(options.workers !== undefined && { workers: options.workers }),
+          ...(options.maxJobs !== undefined && { maxJobs: options.maxJobs }),
+          headful: options.headful,
           json: options.json,
         });
       },

@@ -1,0 +1,291 @@
+/**
+ * `gms run` — execute queued jobs.
+ *
+ * Wires the Google Maps automation to the job engine: browser pool, proxy
+ * provider, worker loop, checkpointing and graceful shutdown.
+ */
+import type { ResolvedConfig } from '../../config/schema.js';
+import { BrowserPool } from '../../core/browser/pool.js';
+import { ArtifactWriter } from '../../core/browser/artifacts.js';
+import { runJobs, type JobHandler, type PersistableRecord } from '../../core/engine/runner.js';
+import { ShutdownController } from '../../core/engine/shutdown.js';
+import type { GoogleMapsJobParams } from '../../core/engine/planner.js';
+import { createLogger } from '../../core/logging/logger.js';
+import { createProxyProvider } from '../../core/proxy/factory.js';
+import { ulid } from '../../core/util/ids.js';
+import {
+  BlockedError,
+  INITIAL_CURSOR,
+  SelectorRotError,
+  runGoogleMapsJob,
+  type GoogleMapsCursor,
+} from '../../automations/google-maps/index.js';
+import { buildQuery } from '../../automations/google-maps/search.js';
+import type { MergeResult } from '../../automations/google-maps/extract/merge.js';
+import { openDatabaseFromConfig } from '../../db/client.js';
+import { BusinessesRepository } from '../../db/repositories/businesses.js';
+import { formatDuration, heading, keyValue, style, symbol } from '../output.js';
+import path from 'node:path';
+
+export interface RunCommandOptions {
+  readonly config: ResolvedConfig;
+  readonly automationId?: string;
+  readonly workers?: number;
+  readonly maxJobs?: number;
+  readonly headful?: boolean;
+  readonly json?: boolean;
+}
+
+/** Turn one extracted business into the shape the engine persists. */
+function toPersistable(
+  result: MergeResult,
+  params: GoogleMapsJobParams,
+  rank: number,
+  automationId: string,
+  runId: string,
+): PersistableRecord {
+  const b = result.business;
+  return {
+    rank,
+    seedCityId: params.cityId,
+    seedCategoryId: params.categoryId,
+    searchQuery: buildQuery({
+      city: params.city,
+      stateCode: params.stateCode,
+      category: params.category,
+      lat: params.lat,
+      lng: params.lng,
+    }),
+    // A social profile is recorded but never queued for crawling; a business
+    // with no website has no domain row at all.
+    domain: b.domain !== null ? { name: b.domain, isSocial: b.domainIsSocial } : null,
+    business: {
+      cid: b.cid,
+      fid: b.fid,
+      placeId: b.placeId,
+      dedupHash: result.dedupHash,
+      name: b.name ?? 'unknown',
+      categoryPrimary: b.categoryPrimary,
+      categoriesJson: null,
+      rating: b.rating,
+      reviewsCount: b.reviewsCount,
+      phoneRaw: b.phoneRaw,
+      phoneE164: b.phoneE164,
+      addressRaw: b.addressRaw,
+      street: b.street,
+      city: b.city,
+      stateCode: b.stateCode,
+      postalCode: b.postalCode,
+      country: b.country,
+      lat: b.lat,
+      lng: b.lng,
+      plusCode: b.plusCode,
+      websiteRaw: b.websiteRaw,
+      websiteUrl: b.websiteUrl,
+      domainId: null, // assigned by the engine after the domain upsert
+      gmapsUrl: b.gmapsUrl,
+      thumbnailUrl: b.thumbnailUrl,
+      hoursJson: b.hoursJson,
+      permanentlyClosed: b.permanentlyClosed,
+      extractionSource: JSON.stringify(result.provenance),
+      rawJson: null,
+      automationId,
+      runId,
+    },
+  };
+}
+
+export async function runRun(options: RunCommandOptions): Promise<void> {
+  const { config } = options;
+  const automationId = options.automationId ?? 'google-maps';
+  const runId = ulid();
+
+  const logger = createLogger({
+    level: config.logging.level,
+    pretty: config.logging.pretty,
+    ...(config.logging.file && {
+      file: path.join(config.paths.logsDir, `${runId}.ndjson`),
+    }),
+    redact: config.logging.redact,
+  }).child({ runId, automationId });
+
+  const driver = openDatabaseFromConfig(config);
+  const proxies = createProxyProvider(config);
+  const pool = new BrowserPool({
+    headless: options.headful === true ? false : config.browser.headless,
+    ...(config.browser.channel !== undefined && { channel: config.browser.channel }),
+    ...(config.browser.executablePath !== undefined && {
+      executablePath: config.browser.executablePath,
+    }),
+    blockResources: config.browser.blockResources,
+    navigationTimeoutMs: config.browser.navigationTimeoutMs,
+    actionTimeoutMs: config.browser.actionTimeoutMs,
+    timezoneId: config.browser.timezoneId,
+    logger,
+  });
+  const artifacts = new ArtifactWriter({ rootDir: config.paths.artifactsDir, runId, logger });
+
+  const shutdown = new ShutdownController({
+    graceSeconds: config.runtime.shutdownGraceSeconds,
+    logger,
+  });
+  shutdown.install();
+  shutdown.onShutdown('browser', () => pool.close());
+  shutdown.onShutdown('database', () => {
+    driver.close();
+  });
+
+  /**
+   * Run one job.
+   *
+   * Records are buffered and committed once at the end of the job rather than
+   * per listing: a commit per listing would be ~60 transactions per job, and the
+   * checkpoint already makes a mid-job crash resumable.
+   */
+  const handler: JobHandler = async (ctx) => {
+    const params = JSON.parse(ctx.lease.job.params_json) as GoogleMapsJobParams;
+    const target = {
+      city: params.city,
+      stateCode: params.stateCode,
+      category: params.category,
+      lat: params.lat,
+      lng: params.lng,
+    };
+
+    const lease = await pool.lease({ proxy: proxies.acquire('browser') });
+    const buffered: PersistableRecord[] = [];
+    let cursor: GoogleMapsCursor = ctx.checkpoint<GoogleMapsCursor>() ?? INITIAL_CURSOR;
+
+    try {
+      const outcome = await runGoogleMapsJob({
+        page: lease.page,
+        target,
+        signal: ctx.signal,
+        logger: ctx.logger,
+        maxListings: 120,
+        scrollStepPx: config.humanize.scroll.stepPx,
+        scrollPauseMs: config.humanize.scroll.pauseMs,
+        delayBetweenListingsMs: config.humanize.delayBetweenListingsMs,
+        cursor,
+        onCheckpoint: (next) => {
+          cursor = next;
+        },
+        onRecord: (result, rank) => {
+          buffered.push(toPersistable(result, params, rank, automationId, ctx.runId));
+        },
+      });
+
+      // One transaction: records plus checkpoint, fenced. A worker that lost its
+      // lease writes nothing at all.
+      if (!ctx.commit({ records: buffered, cursor })) {
+        return { kind: 'failed', reason: 'lease lost — results discarded', errorKind: 'fenced' };
+      }
+
+      switch (outcome.kind) {
+        case 'ok':
+          return { kind: 'ok', resultCount: outcome.extracted };
+        case 'blocked':
+          return { kind: 'blocked', reason: outcome.verdict.reason ?? 'blocked' };
+        case 'unhealthy':
+          return { kind: 'failed', reason: outcome.reason, errorKind: 'selector_rot' };
+        case 'aborted':
+          return { kind: 'aborted' };
+      }
+    } catch (error) {
+      if (error instanceof BlockedError) {
+        await artifacts.captureFailure(lease.page, ctx.lease.job.id, { kind: 'blocked' });
+        return { kind: 'blocked', reason: error.verdict.reason ?? 'blocked' };
+      }
+      if (error instanceof SelectorRotError) {
+        await artifacts.captureFailure(lease.page, ctx.lease.job.id, {
+          kind: 'selector_rot',
+          rates: error.rates,
+        });
+        // Abort the whole run: writing thousands of null rows that look like
+        // completed work is strictly worse than stopping loudly.
+        ctx.logger.fatal({ rates: error.rates }, error.message);
+        void shutdown.shutdown('manual');
+        return { kind: 'failed', reason: error.message, errorKind: 'selector_rot' };
+      }
+      await artifacts.captureFailure(lease.page, ctx.lease.job.id, { error: String(error) });
+      return { kind: 'failed', reason: String(error) };
+    } finally {
+      await lease.release();
+    }
+  };
+
+  try {
+    const summary = await runJobs({
+      driver,
+      automationId,
+      logger,
+      signal: shutdown.signal,
+      proxies,
+      handler,
+      workers: options.workers ?? config.runtime.workers,
+      ...(options.maxJobs !== undefined && { maxJobs: options.maxJobs }),
+      leaseSeconds: config.runtime.jobLeaseSeconds,
+      heartbeatSeconds: config.runtime.heartbeatSeconds,
+      reaperIntervalSeconds: config.runtime.reaperIntervalSeconds,
+      adaptive: config.runtime.adaptiveConcurrency.enabled
+        ? {
+            min: config.runtime.adaptiveConcurrency.min,
+            max: config.runtime.adaptiveConcurrency.max,
+            blockRateThreshold: config.runtime.adaptiveConcurrency.blockRateThreshold,
+          }
+        : null,
+      runId,
+    });
+
+    const fill = new BusinessesRepository(driver).fillStats();
+
+    if (options.json === true) {
+      console.log(JSON.stringify({ ...summary, fill }, null, 2));
+      return;
+    }
+
+    console.log(heading('Run summary'));
+    console.log(
+      keyValue([
+        ['run', summary.runId],
+        ['duration', formatDuration(summary.durationMs)],
+        ['stopped', summary.stoppedBecause],
+        ['jobs done', String(summary.stats.jobsCompleted)],
+        ['jobs failed', String(summary.stats.jobsFailed)],
+        ['jobs blocked', String(summary.stats.jobsBlocked)],
+        ['new businesses', String(summary.stats.recordsNew)],
+        ['updated', String(summary.stats.recordsUpdated)],
+        ['sightings', String(summary.stats.sightings)],
+        ['domains queued', String(summary.stats.domainsQueued)],
+      ]),
+    );
+
+    const total = fill['total'] ?? 0;
+    if (total > 0) {
+      console.log(heading('Extraction fill rates'));
+      console.log(
+        keyValue(
+          (['cid', 'name', 'phone', 'address', 'website', 'rating', 'domain'] as const).map(
+            (field) => {
+              const n = fill[field] ?? 0;
+              const pct = ((n / total) * 100).toFixed(1);
+              return [field, `${String(n).padStart(6)} / ${total}  ${pct}%`] as const;
+            },
+          ),
+        ),
+      );
+    }
+
+    console.log(
+      `\n${summary.stats.jobsFailed > 0 ? symbol.warn : symbol.ok} ` +
+        `${summary.stats.recordsNew} new businesses from ${summary.stats.jobsCompleted} job(s)`,
+    );
+    if (summary.stats.jobsFailed > 0) {
+      console.log(style.grey('Inspect failures with:  gms jobs list --status failed'));
+    }
+  } finally {
+    shutdown.uninstall();
+    await pool.close();
+    if (driver.open) driver.close();
+  }
+}

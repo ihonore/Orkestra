@@ -145,6 +145,8 @@ export class BrowserPool {
     context.setDefaultNavigationTimeout(this.options.navigationTimeoutMs ?? 45_000);
     context.setDefaultTimeout(this.options.actionTimeoutMs ?? 15_000);
 
+    await installEvaluateShims(context);
+
     const blocked = this.options.blockResources ?? DEFAULT_BLOCKED;
     if (blocked.length > 0) await installResourceBlocking(context, blocked);
 
@@ -196,6 +198,28 @@ export class BrowserPool {
 }
 
 /**
+ * Define helpers that transpiled `page.evaluate` bodies expect to exist.
+ *
+ * esbuild — which is what `tsx` uses, and therefore what every dev run and every
+ * test uses — rewrites named function expressions to call a `__name()` helper so
+ * that `Function.prototype.name` survives minification. That helper is emitted
+ * into the *Node* module scope, but `page.evaluate` serializes only the function
+ * source and runs it in the browser, where the helper does not exist. Any
+ * evaluate body containing a named arrow then dies with
+ * `ReferenceError: __name is not defined`.
+ *
+ * It is invisible in a `tsc` build (tsc emits no such helper), so without this
+ * the code would work in production and fail in every test — the worst possible
+ * split. Defining it as identity in the page costs nothing and fixes both.
+ */
+async function installEvaluateShims(context: BrowserContext): Promise<void> {
+  await context.addInitScript(() => {
+    const scope = globalThis as unknown as Record<string, unknown>;
+    scope['__name'] ??= (fn: unknown): unknown => fn;
+  });
+}
+
+/**
  * Abort requests for the given resource types.
  *
  * Worth 3–5x on page load and a large bandwidth saving on metered residential
@@ -222,10 +246,10 @@ export async function installResourceBlocking(
  * Used for block detection, where only the first screenful matters and pulling a
  * multi-megabyte DOM into Node for a regex would be wasteful.
  */
+/* eslint-disable no-restricted-globals --
+   The evaluate() callback below runs in the browser, not in Node. */
 export async function visibleText(page: Page, maxChars = 4_000): Promise<string> {
   try {
-    // Runs in the browser, not in Node.
-    // eslint-disable-next-line no-restricted-globals
     const text = await page.evaluate(() => document.body?.innerText ?? '');
     return text.slice(0, maxChars);
   } catch {
@@ -233,3 +257,4 @@ export async function visibleText(page: Page, maxChars = 4_000): Promise<string>
     return '';
   }
 }
+/* eslint-enable no-restricted-globals */
