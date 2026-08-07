@@ -18,7 +18,7 @@ import { runConfigShow } from './commands/config.js';
 import { runDbBackup, runDbCheck, runDbMigrate, runDbStatus, runDbVacuum } from './commands/db.js';
 import { runDoctor } from './commands/doctor.js';
 import { runEnrichEmails } from './commands/enrich.js';
-import { runExportCsv, runExportStatus } from './commands/export.js';
+import { runExportCsv, runExportSheets, runExportStatus } from './commands/export.js';
 import { runUi } from './commands/ui.js';
 import { runImportCategories, runImportCities, runListSheets } from './commands/import.js';
 import { runInit } from './commands/init.js';
@@ -143,15 +143,23 @@ export function buildProgram(): Command {
     .description('verify the environment, database and migrations')
     .option('--proxies', 'probe every configured proxy and report egress IP', false)
     .option('--browser', 'launch Chromium to prove it works', false)
+    .option('--sheets', 'verify Google Sheets credentials and access', false)
     .option('--all', 'run every check, including the slow ones', false)
     .option('--json', 'emit machine-readable output', false)
     .action(
-      async (options: { proxies: boolean; browser: boolean; all: boolean; json: boolean }) => {
+      async (options: {
+        proxies: boolean;
+        browser: boolean;
+        sheets: boolean;
+        all: boolean;
+        json: boolean;
+      }) => {
         const { failed } = await runDoctor({
           config: configFrom(program),
           json: options.json,
           proxies: options.proxies || options.all,
           browser: options.browser || options.all,
+          sheets: options.sheets || options.all,
         });
         if (failed) process.exit(1);
       },
@@ -430,6 +438,36 @@ export function buildProgram(): Command {
           excelSafe: options.excelSafe,
           bom: options.bom,
           crlf: options.crlf,
+          json: options.json,
+        });
+      },
+    );
+  exportCmd
+    .command('sheets')
+    .description('push results to a shared Google Sheet, resuming from the last position')
+    .addOption(
+      new Option('-e, --entity <name>', 'what to export')
+        .choices(['leads-flat', 'businesses', 'emails'])
+        .default('leads-flat'),
+    )
+    .option('-s, --spreadsheet-id <id>', 'from the sheet URL (overrides config)')
+    .option('-t, --tab <name>', 'sheet tab name')
+    .option('--full', 're-send everything, ignoring the cursor', false)
+    .option('--json', 'emit machine-readable output', false)
+    .action(
+      async (options: {
+        entity: string;
+        spreadsheetId?: string;
+        tab?: string;
+        full: boolean;
+        json: boolean;
+      }) => {
+        await runExportSheets({
+          config: configFrom(program),
+          entity: options.entity,
+          ...(options.spreadsheetId !== undefined && { spreadsheetId: options.spreadsheetId }),
+          ...(options.tab !== undefined && { sheetName: options.tab }),
+          full: options.full,
           json: options.json,
         });
       },

@@ -565,6 +565,20 @@ async function loadControl() {
         '<button class="go" id="do-export"' + (busy ? ' disabled' : '') + '>Export CSV</button>' +
         '</div>',
     },
+    {
+      n: 6, title: 'Share with your team',
+      why: 'Sends new leads to a Google Sheet anyone can open. Run it again any time — it only sends what is new.',
+      blocked: !hasBusinesses, satisfied: false,
+      body:
+        '<div class="opts">' +
+        '<label>Sheet ID</label>' +
+        '<input type="text" id="g-id" placeholder="from the sheet URL" style="width:280px">' +
+        '<button class="go" id="do-sheets"' + (busy ? ' disabled' : '') + '>Send to Sheet</button>' +
+        '</div>' +
+        '<p style="margin-top:9px">The ID is the long part of the URL: ' +
+        'docs.google.com/spreadsheets/d/<b>THIS_PART</b>/edit. ' +
+        'Run <code>gms doctor --sheets</code> first — it prints the address to share the sheet with.</p>',
+    },
   ];
 
   $('#steps').innerHTML = steps.map((s) =>
@@ -669,6 +683,14 @@ function wireControls() {
   on('#do-export', () => startTask('export', {
     entity: $('#x-entity').value, excelSafe: $('#x-excel').checked,
     splitByState: $('#x-split').checked, full: $('#x-full').checked }));
+  on('#do-sheets', () => {
+    const id = $('#g-id').value.trim();
+    if (id !== '' && !/^[A-Za-z0-9_-]{20,}$/.test(id)) {
+      alert('That does not look like a sheet ID. Copy the long part of the sheet URL, between /d/ and /edit.');
+      return;
+    }
+    startTask('export-sheets', { entity: 'leads-flat', spreadsheetId: id });
+  });
 }
 
 // While a task runs, poll often enough that the log feels live.

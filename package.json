@@ -34,6 +34,7 @@
     "postbuild": "node -e \"require('fs').chmodSync('dist/cli/main.js', 0o755)\""
   },
   "dependencies": {
+    "@googleapis/sheets": "^14.0.0",
     "better-sqlite3": "^13.0.2",
     "commander": "^15.0.0",
     "pino": "^10.3.1",

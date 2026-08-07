@@ -247,6 +247,43 @@ export const EnrichmentSchema = z
   })
   .strict();
 
+export const ExportersSchema = z
+  .object({
+    csv: z
+      .object({
+        /** Wrap zips and phones as `="01234"` so Excel keeps leading zeros. */
+        excelSafeText: z.boolean().default(false),
+        bom: z.boolean().default(true),
+      })
+      .prefault({}),
+    sheets: z
+      .object({
+        /** From the sheet URL: docs.google.com/spreadsheets/d/<THIS>/edit */
+        spreadsheetId: z.string().min(1).optional(),
+        sheetName: z.string().min(1).default('Leads'),
+        /**
+         * Path to a service-account JSON key.
+         *
+         * Leave unset to use Application Default Credentials, which is the
+         * keyless path and the only one that works where
+         * `iam.disableServiceAccountKeyCreation` is enforced — the default for
+         * GCP organisations created on or after 2024-05-03.
+         */
+        credentialsFile: z.string().min(1).optional(),
+        createIfMissing: z.boolean().default(true),
+        /**
+         * Refuse an export larger than this.
+         *
+         * A spreadsheet holds 10 million cells in total, and the write quota is
+         * 60 requests per minute for the whole service account. Sheets is a
+         * shared *view*; CSV is the bulk path.
+         */
+        maxRows: z.number().int().min(1).max(400_000).default(50_000),
+      })
+      .prefault({}),
+  })
+  .strict();
+
 export const ConfigSchema = z
   .object({
     // `prefault` rather than `default`: it substitutes on the *input* side, so an
@@ -261,6 +298,7 @@ export const ConfigSchema = z
     humanize: HumanizeSchema.prefault({}),
     http: HttpSchema.prefault({}),
     enrichment: EnrichmentSchema.prefault({}),
+    exporters: ExportersSchema.prefault({}),
   })
   .strict()
   .superRefine((config, ctx) => {

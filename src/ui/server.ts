@@ -83,6 +83,23 @@ const COMMANDS: Record<
       return args;
     },
   },
+  'export-sheets': {
+    label: 'Send to Google Sheet',
+    build: (input) => {
+      const args = ['export', 'sheets'];
+      const entity = input['entity'];
+      if (entity === 'businesses' || entity === 'emails' || entity === 'leads-flat') {
+        args.push('--entity', entity);
+      }
+      // A spreadsheet id is [A-Za-z0-9_-]; anything else is not one.
+      const id = input['spreadsheetId'];
+      if (typeof id === 'string' && /^[A-Za-z0-9_-]{20,}$/.test(id.trim())) {
+        args.push('--spreadsheet-id', id.trim());
+      }
+      if (input['full'] === true) args.push('--full');
+      return args;
+    },
+  },
   export: {
     label: 'Export CSV',
     build: (input) => {

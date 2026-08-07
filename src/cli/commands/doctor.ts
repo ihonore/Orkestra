@@ -9,7 +9,7 @@ import os from 'node:os';
 import path from 'node:path';
 import type { ResolvedConfig } from '../../config/schema.js';
 import { errorMessage } from '../../core/errors/taxonomy.js';
-import { displayPath } from '../../core/util/paths.js';
+import { displayPath, resolvePath } from '../../core/util/paths.js';
 import { assessStoragePath } from '../../core/util/storage-safety.js';
 import { checkIntegrity, describeDatabase, openDatabaseFromConfig } from '../../db/client.js';
 import { appliedMigrations, loadMigrations } from '../../db/migrate.js';
@@ -380,6 +380,129 @@ async function checkProxies(config: ResolvedConfig): Promise<CheckResult[]> {
   return results;
 }
 
+/**
+ * Verify the Google Sheets setup end to end.
+ *
+ * Every failure mode here has the same symptom — an export that does not work —
+ * but a completely different fix, so they are distinguished explicitly. The
+ * commonest by far is forgetting to share the sheet with the service account,
+ * which returns a bare 403.
+ */
+async function checkSheets(config: ResolvedConfig): Promise<CheckResult[]> {
+  const settings = config.exporters.sheets;
+
+  if (settings.spreadsheetId === undefined || settings.spreadsheetId === '') {
+    return [
+      {
+        name: 'Google Sheets',
+        status: 'warn',
+        detail: 'not configured',
+        hint: 'Set exporters.sheets.spreadsheetId to share results with your team.',
+      },
+    ];
+  }
+
+  const results: CheckResult[] = [];
+  const { SheetsExporter, MAX_CELLS_PER_SPREADSHEET } = await import('../../exporters/sheets.js');
+  const { VIEWS } = await import('../../views/index.js');
+
+  const credentials =
+    settings.credentialsFile !== undefined
+      ? resolvePath(settings.credentialsFile, config.paths.root)
+      : undefined;
+
+  if (credentials !== undefined) {
+    if (!fs.existsSync(credentials)) {
+      return [
+        {
+          name: 'Google Sheets',
+          status: 'fail',
+          detail: `credentials file not found: ${displayPath(credentials)}`,
+          hint: 'Check exporters.sheets.credentialsFile, or remove it to use gcloud login.',
+        },
+      ];
+    }
+    // The service-account email is what the sheet must be shared with, and
+    // nobody can guess it — so print it.
+    try {
+      const key = JSON.parse(fs.readFileSync(credentials, 'utf8')) as { client_email?: string };
+      results.push({
+        name: 'Sheets identity',
+        status: 'ok',
+        detail: key.client_email ?? 'service account',
+        hint: `Share the sheet with ${key.client_email ?? 'this address'} as an Editor.`,
+      });
+    } catch {
+      return [
+        {
+          name: 'Google Sheets',
+          status: 'fail',
+          detail: 'credentials file is not valid JSON',
+          hint: 'Re-download the service-account key from the Google Cloud console.',
+        },
+      ];
+    }
+  } else {
+    results.push({
+      name: 'Sheets identity',
+      status: 'ok',
+      detail: 'application default credentials',
+      hint: 'Run `gcloud auth application-default login` if this fails.',
+    });
+  }
+
+  try {
+    const exporter = new SheetsExporter({
+      spreadsheetId: settings.spreadsheetId,
+      sheetName: settings.sheetName,
+      createIfMissing: settings.createIfMissing,
+      ...(credentials !== undefined && { credentialsFile: credentials }),
+    });
+
+    const room = await exporter.prepare(VIEWS['leads-flat']!);
+    const usedPercent = ((room.cellsUsed / MAX_CELLS_PER_SPREADSHEET) * 100).toFixed(1);
+
+    results.push({
+      name: 'Sheets access',
+      status: 'ok',
+      detail: `"${settings.sheetName}" is writable`,
+    });
+    results.push({
+      name: 'Sheets capacity',
+      status: room.cellsFree < 100_000 ? 'warn' : 'ok',
+      detail: `${room.cellsUsed.toLocaleString()} cells used (${usedPercent}% of 10M)`,
+      ...(room.cellsFree < 100_000 && {
+        hint: 'Nearly full. Start a fresh spreadsheet, or export to CSV instead.',
+      }),
+    });
+  } catch (error) {
+    const message = errorMessage(error);
+    const status =
+      (error as { status?: number; code?: number }).status ?? (error as { code?: number }).code;
+
+    // Each of these looks identical to a user but needs a different fix.
+    const hint =
+      status === 403
+        ? 'The service account cannot see this sheet. Open the sheet, press Share, and add\n' +
+          'the address shown above as an Editor. This is the usual cause.'
+        : status === 404
+          ? 'No spreadsheet with that id. Check exporters.sheets.spreadsheetId — it is the\n' +
+            'long id from docs.google.com/spreadsheets/d/<THIS>/edit'
+          : /API has not been used|disabled/i.test(message)
+            ? 'Enable the Google Sheets API for this project in the Cloud console.'
+            : 'Check the credentials and the spreadsheet id.';
+
+    results.push({
+      name: 'Sheets access',
+      status: 'fail',
+      detail: message.split('\n')[0] ?? message,
+      hint,
+    });
+  }
+
+  return results;
+}
+
 export interface DoctorOptions {
   readonly config: ResolvedConfig;
   readonly json: boolean;
@@ -387,6 +510,8 @@ export interface DoctorOptions {
   readonly proxies?: boolean;
   /** Launch Chromium to prove it works. */
   readonly browser?: boolean;
+  /** Verify the Google Sheets credentials, access and capacity. */
+  readonly sheets?: boolean;
 }
 
 export async function runDoctor(
@@ -410,6 +535,7 @@ export async function runDoctor(
   // probing a 50-proxy list is a round trip per entry.
   if (options.browser === true) results.push(await checkBrowser(config));
   if (options.proxies === true) results.push(...(await checkProxies(config)));
+  if (options.sheets === true) results.push(...(await checkSheets(config)));
 
   const failed = results.some((r) => r.status === 'fail');
 

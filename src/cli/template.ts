@@ -181,6 +181,31 @@ enrichment:
       # They are flagged (is_role) rather than dropped.
       keepRoleAddresses: true
 
+exporters:
+  csv:
+    # Wrap zips and phones as ="01234" so Excel keeps leading zeros. Off by
+    # default because it produces a file only Excel reads correctly.
+    excelSafeText: false
+    bom: true
+
+  sheets:
+    # The long id from the sheet URL:
+    #   docs.google.com/spreadsheets/d/<THIS>/edit
+    # spreadsheetId: 1a2B3cD4eF5gH6iJ7kL8mN9oP0qR
+    sheetName: Leads
+
+    # Path to a service-account JSON key. Leave unset to use your own login via
+    # "gcloud auth application-default login", which is also the only option
+    # where your organisation blocks service-account keys.
+    # credentialsFile: ~/gms-credentials/gms-exporter.json
+
+    createIfMissing: true
+
+    # Refuse an export larger than this. A spreadsheet holds 10 million cells in
+    # total and one service account may write 60 times a minute, so Sheets is a
+    # shared view — use CSV for bulk. See docs/GOOGLE_SHEETS.md
+    maxRows: 50000
+
 humanize:
   enabled: true
   # Delays are log-normal within these ranges, not uniform: human pauses cluster

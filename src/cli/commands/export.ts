@@ -9,10 +9,11 @@
 import path from 'node:path';
 import type { ResolvedConfig } from '../../config/schema.js';
 import { AppError } from '../../core/errors/taxonomy.js';
-import { displayPath } from '../../core/util/paths.js';
+import { displayPath, resolvePath } from '../../core/util/paths.js';
 import { openDatabaseFromConfig } from '../../db/client.js';
 import { ExportsRepository } from '../../db/repositories/exports.js';
 import { CsvWriter, groupKeyFor } from '../../exporters/csv.js';
+import { SheetsExporter, estimateMinutes } from '../../exporters/sheets.js';
 import { VIEWS, readRows, type ExportRow } from '../../views/index.js';
 import { formatBytes, heading, keyValue, style, symbol } from '../output.js';
 import fs from 'node:fs';
@@ -148,6 +149,162 @@ export function runExportCsv(options: ExportCsvOptions): void {
   } finally {
     driver.close();
   }
+}
+
+export interface ExportSheetsOptions {
+  readonly config: ResolvedConfig;
+  readonly entity?: string;
+  readonly spreadsheetId?: string;
+  readonly sheetName?: string;
+  readonly full?: boolean;
+  readonly json?: boolean;
+}
+
+/**
+ * `gms export sheets` — push results to a shared spreadsheet.
+ *
+ * The team-visible view. Deliberately capped and cursor-driven: the sheet is a
+ * window onto the database, and the database stays the source of truth.
+ */
+export async function runExportSheets(options: ExportSheetsOptions): Promise<void> {
+  const entity = options.entity ?? 'leads-flat';
+  const schema = VIEWS[entity];
+  if (schema === undefined) {
+    throw new AppError(`Unknown entity: ${entity}`, {
+      code: 'CONFIG_INVALID',
+      hint: `Available: ${Object.keys(VIEWS).join(', ')}`,
+    });
+  }
+
+  const settings = options.config.exporters.sheets;
+  const spreadsheetId = options.spreadsheetId ?? settings.spreadsheetId;
+  if (spreadsheetId === undefined || spreadsheetId.trim() === '') {
+    throw new AppError('No spreadsheet configured.', {
+      code: 'CONFIG_INVALID',
+      hint:
+        'Set exporters.sheets.spreadsheetId, or pass --spreadsheet-id.\n' +
+        'It is the long id in the sheet URL: docs.google.com/spreadsheets/d/<THIS>/edit',
+    });
+  }
+
+  const sheetName = options.sheetName ?? settings.sheetName;
+  const driver = openDatabaseFromConfig(options.config);
+  const cursors = new ExportsRepository(driver);
+
+  try {
+    if (options.full === true) cursors.reset('sheets', spreadsheetId, entity);
+    const startId = cursors.lastId('sheets', spreadsheetId, entity);
+
+    const exporter = new SheetsExporter({
+      spreadsheetId,
+      sheetName,
+      createIfMissing: settings.createIfMissing,
+      ...(settings.credentialsFile !== undefined && {
+        credentialsFile: resolvePath(settings.credentialsFile, options.config.paths.root),
+      }),
+    });
+
+    const room = await exporter.prepare(schema);
+    const pending = countPending(driver, schema, startId);
+
+    if (pending === 0) {
+      console.log(
+        style.grey(
+          startId > 0
+            ? `Nothing new — the sheet is up to date at row ${startId}.`
+            : 'Nothing to export yet. Collect some businesses first.',
+        ),
+      );
+      return;
+    }
+
+    // Refuse rather than fail partway through with a half-written sheet.
+    if (pending > settings.maxRows) {
+      throw new AppError(
+        `${pending.toLocaleString()} rows exceeds the ${settings.maxRows.toLocaleString()}-row limit for Sheets.`,
+        {
+          code: 'CONFIG_INVALID',
+          hint:
+            'A spreadsheet holds 10 million cells in total, and one service account may write\n' +
+            '60 times a minute. Use `gms export csv` for bulk, or raise\n' +
+            'exporters.sheets.maxRows if you are sure it fits.',
+        },
+      );
+    }
+
+    const cellsNeeded = pending * schema.fields.length;
+    if (cellsNeeded > room.cellsFree) {
+      throw new AppError(
+        `This export needs ${cellsNeeded.toLocaleString()} cells but the spreadsheet has ${room.cellsFree.toLocaleString()} free.`,
+        { code: 'CONFIG_INVALID', hint: 'Use a fresh spreadsheet, or export to CSV.' },
+      );
+    }
+
+    console.log(
+      keyValue([
+        ['spreadsheet', spreadsheetId],
+        ['tab', sheetName],
+        ['rows to send', pending.toLocaleString()],
+        ['estimated', `${estimateMinutes(pending).toFixed(1)} min at 60 writes/min`],
+      ]),
+    );
+
+    let lastId = startId;
+    let written = 0;
+    let requests = 0;
+    let retries = 0;
+
+    for (;;) {
+      const rows = readRows(driver, schema, lastId, PAGE_SIZE);
+      if (rows.length === 0) break;
+
+      const result = await exporter.append(rows, schema);
+      written += result.appended;
+      requests += result.requests;
+      retries += result.retries;
+
+      lastId = rows.at(-1)?.id ?? lastId;
+      // Only after Sheets confirmed the write.
+      cursors.advance('sheets', spreadsheetId, entity, lastId, rows.length);
+
+      if (rows.length < PAGE_SIZE) break;
+    }
+
+    if (options.json === true) {
+      console.log(JSON.stringify({ entity, written, requests, retries, lastId }, null, 2));
+      return;
+    }
+
+    console.log(heading('Sent'));
+    console.log(
+      keyValue([
+        ['rows', written.toLocaleString()],
+        ['api requests', String(requests)],
+        ['retries', String(retries)],
+        ['cursor', `${startId} -> ${lastId}`],
+      ]),
+    );
+    console.log(
+      `\n${symbol.ok} ${written.toLocaleString()} row(s) in ` +
+        style.cyan(`https://docs.google.com/spreadsheets/d/${spreadsheetId}/edit`),
+    );
+  } finally {
+    driver.close();
+  }
+}
+
+/** How many rows a view would yield beyond the cursor. */
+function countPending(
+  driver: ReturnType<typeof openDatabaseFromConfig>,
+  schema: (typeof VIEWS)[string],
+  lastId: number,
+): number {
+  // Wrapping the view keeps one definition of what a row is.
+  const sql = schema.sql.replace(/LIMIT :limit/, 'LIMIT -1');
+  return (
+    driver.prepare<{ n: number }>(`SELECT COUNT(*) AS n FROM (${sql})`).get({ lastId, limit: -1 })
+      ?.n ?? 0
+  );
 }
 
 /** `gms export status` — where each exporter has reached. */

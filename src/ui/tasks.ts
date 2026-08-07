@@ -20,7 +20,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-export type TaskName = 'run' | 'enrich' | 'export' | 'import-cities' | 'import-categories' | 'plan';
+export type TaskName =
+  'run' | 'enrich' | 'export' | 'export-sheets' | 'import-cities' | 'import-categories' | 'plan';
 
 export type TaskState = 'running' | 'succeeded' | 'failed' | 'stopped';
 
