@@ -37,6 +37,16 @@ export default tseslint.config(
       // Library code logs through pino. Only the CLI writes to stdout.
       'no-console': 'error',
       eqeqeq: ['error', 'always', { null: 'ignore' }],
+      // The DOM lib is enabled for page.evaluate() callbacks, which run in the
+      // browser. Using these in Node code typechecks but crashes at runtime, so
+      // each legitimate browser-side use disables this rule explicitly.
+      'no-restricted-globals': [
+        'error',
+        { name: 'document', message: 'Only inside page.evaluate() — add an eslint-disable there.' },
+        { name: 'window', message: 'Only inside page.evaluate() — add an eslint-disable there.' },
+        { name: 'navigator', message: 'Only inside page.evaluate() — add an eslint-disable there.' },
+        { name: 'location', message: 'Only inside page.evaluate() — add an eslint-disable there.' },
+      ],
       'no-restricted-syntax': [
         'error',
         {

@@ -56,6 +56,97 @@ logging:
   file: true
   # Extra redaction paths, merged with the built-in secret paths.
   redact: []
+
+runtime:
+  # Concurrent browser workers. Each is roughly 200-300 MB of Chromium, so 4 is
+  # comfortable on a 4 GB VPS and 8 wants 8 GB.
+  workers: 4
+  # HTTP workers for email enrichment. Far cheaper than browsers.
+  httpWorkers: 16
+
+  # How long a worker owns a job before the reaper may reclaim it. Set this
+  # generously above your p99 job duration: a worker whose event loop stalls
+  # past the lease is fenced out and its work discarded.
+  jobLeaseSeconds: 300
+  heartbeatSeconds: 30
+
+  # On Ctrl-C, how long in-flight jobs get to checkpoint before being abandoned.
+  shutdownGraceSeconds: 30
+  reaperIntervalSeconds: 60
+
+  adaptiveConcurrency:
+    # Backs off hard when the block rate rises, then creeps back up.
+    enabled: true
+    min: 1
+    max: 8
+    blockRateThreshold: 0.2
+
+browser:
+  headless: true
+  # channel: chrome          # use an installed Chrome instead of the bundled build
+  # executablePath: /path/to/chrome
+
+  # Aborting these is worth 3-5x on page load and a large saving on metered
+  # residential proxies. 'stylesheet' is available but leaving it out is
+  # deliberate: Maps lays the results feed out with CSS, and a feed that never
+  # lays out cannot be scrolled.
+  blockResources: [image, media, font]
+
+  navigationTimeoutMs: 45000
+  actionTimeoutMs: 15000
+
+  # Retire a context after this many jobs, bounding memory growth over a run
+  # that lasts days.
+  jobsPerContext: 10
+
+  timezoneId: America/New_York
+
+  artifacts:
+    # Written to dataDir/artifacts/{runId}/{jobId}/ when a job fails.
+    onFailure: [screenshot, html]
+    retainDays: 14
+
+proxy:
+  # none | list | gateway
+  # 'none' is explicit on purpose: volume scraping from your own IP gets rate
+  # limited quickly, and silently falling back to it is worse than failing.
+  mode: none
+
+  list:
+    # A file of  host:port  or  host:port:username:password  or  scheme://...
+    # Its contents are secret; the path is not.
+    # file: ./proxies.txt
+    defaultScheme: http
+
+  gateway:
+    # A single rotating endpoint. Must be http:// or https:// — Playwright
+    # rejects SOCKS with credentials, and the sticky session token is carried in
+    # the username.
+    # server: http://gate.provider.com:7777
+    # username: your-account          # set via GMS_PROXY__GATEWAY__USERNAME
+    # password: your-password         # set via GMS_PROXY__GATEWAY__PASSWORD
+
+    # Sticky-session pattern. Providers disagree on the format, so confirm the
+    # exact token with yours. {session} is substituted per identity.
+    # sessionPattern: "{username}-session-{session}"
+    sessionTtlSeconds: 600
+    # country: US
+
+  healthCheckUrl: https://api.ipify.org?format=json
+  maxConsecutiveFailures: 3
+  # How long a blocked identity is benched.
+  banCooldownSeconds: 900
+
+humanize:
+  enabled: true
+  # Delays are log-normal within these ranges, not uniform: human pauses cluster
+  # low with a long tail. A fixed wait is both slower and a clean automation
+  # signal.
+  delayBetweenListingsMs: [400, 1400]
+  delayBetweenJobsMs: [1500, 5000]
+  scroll:
+    stepPx: [300, 900]
+    pauseMs: [350, 1200]
 `;
 
 /** `.gitignore` entries `gms init` ensures are present. */

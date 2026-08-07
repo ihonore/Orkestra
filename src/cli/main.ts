@@ -136,11 +136,21 @@ export function buildProgram(): Command {
   program
     .command('doctor')
     .description('verify the environment, database and migrations')
+    .option('--proxies', 'probe every configured proxy and report egress IP', false)
+    .option('--browser', 'launch Chromium to prove it works', false)
+    .option('--all', 'run every check, including the slow ones', false)
     .option('--json', 'emit machine-readable output', false)
-    .action((options: { json: boolean }) => {
-      const { failed } = runDoctor({ config: configFrom(program), json: options.json });
-      if (failed) process.exit(1);
-    });
+    .action(
+      async (options: { proxies: boolean; browser: boolean; all: boolean; json: boolean }) => {
+        const { failed } = await runDoctor({
+          config: configFrom(program),
+          json: options.json,
+          proxies: options.proxies || options.all,
+          browser: options.browser || options.all,
+        });
+        if (failed) process.exit(1);
+      },
+    );
 
   const config = program.command('config').description('inspect configuration');
   config

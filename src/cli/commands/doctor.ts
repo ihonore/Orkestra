@@ -267,12 +267,131 @@ function checkDatabase(config: ResolvedConfig): CheckResult[] {
   return results;
 }
 
+/**
+ * Verify Chromium is installed and can actually launch.
+ *
+ * `npm install playwright` does not download browsers — `playwright install
+ * chromium` does. Without this check the first symptom is a job failing
+ * mid-run with a stack trace about a missing executable.
+ */
+async function checkBrowser(config: ResolvedConfig): Promise<CheckResult> {
+  try {
+    const { chromium } = await import('playwright');
+    const executable = chromium.executablePath();
+    if (!fs.existsSync(executable)) {
+      return {
+        name: 'Browser',
+        status: 'fail',
+        detail: 'Chromium is not installed',
+        hint: 'Run: npx playwright install chromium',
+      };
+    }
+
+    const browser = await chromium.launch({
+      headless: config.browser.headless,
+      args: ['--disable-blink-features=AutomationControlled'],
+    });
+    const version = browser.version();
+    await browser.close();
+
+    return {
+      name: 'Browser',
+      status: 'ok',
+      detail: `Chromium ${version} launches (${config.browser.headless ? 'headless' : 'headful'})`,
+    };
+  } catch (error) {
+    return {
+      name: 'Browser',
+      status: 'fail',
+      detail: errorMessage(error).split('\n')[0] ?? 'launch failed',
+      hint:
+        'Run: npx playwright install chromium\n' +
+        'On a bare Linux host also run: npx playwright install-deps chromium',
+    };
+  }
+}
+
+/**
+ * Probe every proxy and report its egress IP and latency.
+ *
+ * The thing this actually catches is a proxy that connects but exits from an
+ * unexpected country, or credentials that are silently wrong — both of which
+ * otherwise present as an inexplicable block rate hours into a run.
+ */
+async function checkProxies(config: ResolvedConfig): Promise<CheckResult[]> {
+  if (config.proxy.mode === 'none') {
+    return [
+      {
+        name: 'Proxies',
+        status: 'warn',
+        detail: 'proxy.mode is "none" — traffic exits from this host',
+        hint: 'Volume scraping from one residential IP will be rate limited quickly.',
+      },
+    ];
+  }
+
+  const { createProxyProvider } = await import('../../core/proxy/factory.js');
+  let provider;
+  try {
+    provider = createProxyProvider(config);
+  } catch (error) {
+    return [{ name: 'Proxies', status: 'fail', detail: errorMessage(error) }];
+  }
+
+  const probes = await provider.probe({ url: config.proxy.healthCheckUrl, timeoutMs: 15_000 });
+  if (probes.length === 0) {
+    return [{ name: 'Proxies', status: 'fail', detail: 'no proxies configured' }];
+  }
+
+  const alive = probes.filter((p) => p.ok);
+  const results: CheckResult[] = [
+    {
+      name: 'Proxies',
+      status: alive.length === 0 ? 'fail' : alive.length < probes.length ? 'warn' : 'ok',
+      detail: `${alive.length}/${probes.length} reachable (mode: ${config.proxy.mode})`,
+      ...(alive.length < probes.length && {
+        hint: 'Dead entries are skipped at runtime, but a shrinking pool raises the block rate.',
+      }),
+    },
+  ];
+
+  for (const probe of probes) {
+    results.push({
+      name: `  ${probe.label}`,
+      status: probe.ok ? 'ok' : 'fail',
+      detail: probe.ok
+        ? `egress ${probe.egressIp ?? 'unknown'}${probe.latencyMs !== undefined ? ` (${probe.latencyMs}ms)` : ''}`
+        : (probe.error ?? 'unreachable'),
+    });
+  }
+
+  // Distinct egress IPs matter more than count: ten entries that all exit from
+  // one address are one identity wearing ten hats, and will be blocked together.
+  const distinct = new Set(alive.map((p) => p.egressIp).filter(Boolean));
+  if (alive.length > 1 && distinct.size < alive.length) {
+    results.push({
+      name: '  egress',
+      status: 'warn',
+      detail: `${distinct.size} distinct IP(s) across ${alive.length} working proxies`,
+      hint: 'Proxies sharing an exit IP share a ban. Check the provider’s rotation settings.',
+    });
+  }
+
+  return results;
+}
+
 export interface DoctorOptions {
   readonly config: ResolvedConfig;
   readonly json: boolean;
+  /** Probe every configured proxy. Adds real network time. */
+  readonly proxies?: boolean;
+  /** Launch Chromium to prove it works. */
+  readonly browser?: boolean;
 }
 
-export function runDoctor(options: DoctorOptions): { results: CheckResult[]; failed: boolean } {
+export async function runDoctor(
+  options: DoctorOptions,
+): Promise<{ results: CheckResult[]; failed: boolean }> {
   const { config } = options;
 
   const results: CheckResult[] = [
@@ -286,6 +405,11 @@ export function runDoctor(options: DoctorOptions): { results: CheckResult[]; fai
   if (mappedDrive !== null) results.push(mappedDrive);
 
   results.push(...checkDatabase(config));
+
+  // Opt-in because both cost real time: launching Chromium is seconds, and
+  // probing a 50-proxy list is a round trip per entry.
+  if (options.browser === true) results.push(await checkBrowser(config));
+  if (options.proxies === true) results.push(...(await checkProxies(config)));
 
   const failed = results.some((r) => r.status === 'fail');
 

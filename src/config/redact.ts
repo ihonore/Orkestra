@@ -13,15 +13,22 @@ export const REDACTED = '[redacted]';
 /**
  * Config paths whose values must never be printed or logged.
  *
- * M0 has no secrets — proxy credentials and service-account keys arrive with the
- * milestones that add them. The list is wired up now so those milestones only
- * add a string here rather than rediscovering the need.
+ * Scoped to what actually grants access. `gms config show` is meant to be
+ * pasteable into a bug report, and over-redaction makes it useless for the
+ * questions people actually ask of it:
+ *
+ *  - `gateway.username` is shown. With sticky sessions it carries the session
+ *    token pattern, which is exactly what someone debugging "why is every
+ *    request coming from a different IP" needs to see. On its own it grants
+ *    nothing; the password is what does.
+ *  - `list.file` is a path, not a credential. Its *contents* are secret and are
+ *    never printed, but hiding the path only obstructs "why is my proxy list
+ *    not loading".
  */
 export const SECRET_CONFIG_PATHS: readonly string[] = [
   'proxy.gateway.password',
-  'proxy.gateway.username',
-  'proxy.list.file',
   'exporters.sheets.credentials',
+  'exporters.sheets.privateKey',
 ];
 
 /** Additional paths redacted in log records (not config), e.g. HTTP headers. */

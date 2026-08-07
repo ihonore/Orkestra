@@ -1,7 +1,12 @@
 {
   "compilerOptions": {
     "target": "ES2023",
-    "lib": ["ES2023"],
+    // DOM is here for code inside page.evaluate(), which runs in the browser,
+    // not in Node. That does mean `document` and `window` typecheck everywhere,
+    // so eslint's no-restricted-globals forbids them by default — each genuine
+    // browser-side callback disables it explicitly, which keeps every crossing
+    // of the Node/browser boundary visible and greppable.
+    "lib": ["ES2023", "DOM"],
     "module": "NodeNext",
     "moduleResolution": "NodeNext",
     "types": ["node"],

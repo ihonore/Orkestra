@@ -3,6 +3,7 @@ import path from 'node:path';
 import { hashConfig, loadConfig } from '../src/config/loader.js';
 import { readEnvLayer } from '../src/config/env.js';
 import { REDACTED, redactSecrets } from '../src/config/redact.js';
+import { CONFIG_TEMPLATE } from '../src/cli/template.js';
 import { isAppError } from '../src/core/errors/taxonomy.js';
 import { cleanupTempDirs, tempDir, writeFile } from './helpers.js';
 
@@ -180,6 +181,37 @@ describe('config hash', () => {
     expect(a.hash).toBe(b.hash);
   });
 });
+
+describe('the init template', () => {
+  it('validates against the schema', () => {
+    // The template is the first thing every user sees, and it is a hand-written
+    // string. Without this test it drifts silently: a renamed or removed key
+    // makes `gms init` produce a config that `gms doctor` then rejects.
+    const dir = tempDir();
+    writeFile(dir, 'gms.config.yaml', CONFIG_TEMPLATE);
+    expect(() => loadConfig({ cwd: dir, env: {} })).not.toThrow();
+  });
+
+  it('documents values that match the schema defaults', () => {
+    // A template that says `workers: 4` while the default is 8 is worse than no
+    // template — it is documentation that lies.
+    const templated = loadConfig({ cwd: writeTemplate(), env: {} });
+    const defaults = loadConfig({ cwd: tempDir(), env: {} });
+
+    expect(templated.runtime).toEqual(defaults.runtime);
+    expect(templated.browser).toEqual(defaults.browser);
+    expect(templated.proxy).toEqual(defaults.proxy);
+    expect(templated.humanize).toEqual(defaults.humanize);
+    expect(templated.database).toEqual(defaults.database);
+    expect(templated.logging).toEqual(defaults.logging);
+  });
+});
+
+function writeTemplate(): string {
+  const dir = tempDir();
+  writeFile(dir, 'gms.config.yaml', CONFIG_TEMPLATE);
+  return dir;
+}
 
 describe('redaction', () => {
   it('masks secret paths without mutating the input', () => {
