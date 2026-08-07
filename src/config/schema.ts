@@ -189,6 +189,64 @@ export const RuntimeSchema = z
   })
   .strict();
 
+export const HttpSchema = z
+  .object({
+    timeoutMs: z.number().int().min(1_000).max(120_000).default(15_000),
+    maxRedirects: z.number().int().min(0).max(20).default(5),
+    /** Hard cap per response. A 50 MB page never repays reading it. */
+    maxBodyBytes: z.number().int().min(64_000).default(2_097_152),
+    concurrencyPerHost: z.number().int().min(1).max(16).default(2),
+    perHostDelayMs: RangeSchema.default([250, 900]),
+    /** A site's own Crawl-delay is honoured on top of this. */
+    respectRobots: z.boolean().default(true),
+  })
+  .strict();
+
+export const EnrichmentSchema = z
+  .object({
+    websiteEmails: z
+      .object({
+        enabled: z.boolean().default(true),
+        /** 0 = landing page only. 1 covers the contact/about pages that matter. */
+        maxDepth: z.number().int().min(0).max(4).default(1),
+        maxPages: z.number().int().min(1).max(200).default(8),
+        maxTimePerDomainMs: z.number().int().min(5_000).max(600_000).default(60_000),
+        maxBytesPerDomain: z.number().int().min(100_000).default(5_242_880),
+        followSubdomains: z.boolean().default(false),
+        /**
+         * A page offering more addresses than this is a staff directory, not a
+         * business. In the legacy data one university page contributed 67.
+         */
+        maxEmailsPerPage: z.number().int().min(1).max(100).default(5),
+        maxEmailsPerDomain: z.number().int().min(1).max(500).default(25),
+        recrawlAfterDays: z.number().int().min(1).max(365).default(90),
+        validation: z
+          .object({
+            /**
+             * Reject .gov, .mil and state/local government domains.
+             *
+             * Government bodies are not sales prospects.
+             */
+            excludeGovernment: z.boolean().default(true),
+            /**
+             * Reject .edu and school domains.
+             *
+             * On by default because university directories were the single
+             * largest junk source in the legacy data: 146 of 597 addresses came
+             * from four universities. Turn off only if you sell to institutions.
+             */
+            excludeEducation: z.boolean().default(true),
+            /** Extra domains to reject outright. */
+            blockedDomains: z.array(z.string()).default([]),
+            /** Keep info@/sales@ addresses. They convert worse but still convert. */
+            keepRoleAddresses: z.boolean().default(true),
+          })
+          .prefault({}),
+      })
+      .prefault({}),
+  })
+  .strict();
+
 export const ConfigSchema = z
   .object({
     // `prefault` rather than `default`: it substitutes on the *input* side, so an
@@ -201,6 +259,8 @@ export const ConfigSchema = z
     browser: BrowserSchema.prefault({}),
     proxy: ProxySchema.prefault({}),
     humanize: HumanizeSchema.prefault({}),
+    http: HttpSchema.prefault({}),
+    enrichment: EnrichmentSchema.prefault({}),
   })
   .strict()
   .superRefine((config, ctx) => {

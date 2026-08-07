@@ -16,6 +16,7 @@ import { APP_VERSION } from '../version.js';
 import { runConfigShow } from './commands/config.js';
 import { runDbBackup, runDbCheck, runDbMigrate, runDbStatus, runDbVacuum } from './commands/db.js';
 import { runDoctor } from './commands/doctor.js';
+import { runEnrichEmails } from './commands/enrich.js';
 import { runImportCategories, runImportCities, runListSheets } from './commands/import.js';
 import { runInit } from './commands/init.js';
 import { runPlan } from './commands/plan.js';
@@ -264,6 +265,22 @@ export function buildProgram(): Command {
         });
       },
     );
+
+  const enrich = program.command('enrich').description('enrich scraped businesses');
+  enrich
+    .command('emails')
+    .description('crawl business websites for contact addresses')
+    .option('-w, --workers <n>', 'concurrent HTTP workers', toInt)
+    .option('-n, --max-domains <n>', 'stop after this many domains', toInt)
+    .option('--json', 'emit machine-readable output', false)
+    .action(async (options: { workers?: number; maxDomains?: number; json: boolean }) => {
+      await runEnrichEmails({
+        config: configFrom(program),
+        ...(options.workers !== undefined && { workers: options.workers }),
+        ...(options.maxDomains !== undefined && { maxDomains: options.maxDomains }),
+        json: options.json,
+      });
+    });
 
   program
     .command('status')

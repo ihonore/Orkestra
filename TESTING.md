@@ -456,6 +456,38 @@ npm run gms -- run --workers 1 --max-jobs 1
 
 ---
 
+## M4 — measured actuals (✓ complete)
+
+Run against the 108 real domains queued by the M3 run:
+
+| Check | Result |
+|---|---|
+| Domains crawled | 108 (68 done, 29 failed, 11 parked, 2 social skipped) |
+| Usable addresses | **74**, of which 58 are named people rather than role accounts |
+| Businesses reached | 47 |
+| Discovery: mailto / cfemail / text / jsonld | 74 / 14 / 6 / 2 |
+| Government addresses kept | **0** |
+| Education addresses kept | **0** |
+| Telemetry, image-filename, placeholder | **0** |
+| Legacy corpus (461 real addresses) | 304 kept, 157 rejected, 0 gov/edu leaked |
+
+Reproduce:
+
+```bash
+gms enrich emails --workers 8
+```
+
+Compliance queries that must all return 0:
+
+```bash
+sqlite3 data/gms.sqlite "
+SELECT COUNT(*) FROM emails WHERE is_junk=0 AND (email_domain LIKE '%.gov' OR email_domain LIKE '%.mil');
+SELECT COUNT(*) FROM emails WHERE is_junk=0 AND email_domain LIKE '%.edu';
+SELECT COUNT(*) FROM emails WHERE is_junk=0 AND email_domain LIKE '%sentry%';"
+```
+
+---
+
 ## M4 — Email Enrichment
 
 **Pass criteria:**

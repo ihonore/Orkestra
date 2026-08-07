@@ -137,6 +137,50 @@ proxy:
   # How long a blocked identity is benched.
   banCooldownSeconds: 900
 
+http:
+  # Used by the email crawler, not the browser.
+  timeoutMs: 15000
+  maxRedirects: 5
+  maxBodyBytes: 2097152
+  concurrencyPerHost: 2
+  perHostDelayMs: [250, 900]
+  # A site's own Crawl-delay is honoured on top of the delay above.
+  respectRobots: true
+
+enrichment:
+  websiteEmails:
+    enabled: true
+
+    # 0 = landing page only. 1 reaches the contact/about pages, which is where
+    # addresses actually live.
+    maxDepth: 1
+    maxPages: 8
+    maxTimePerDomainMs: 60000
+    maxBytesPerDomain: 5242880
+    followSubdomains: false
+
+    # A page offering more addresses than this is a staff directory, not a
+    # business. In the legacy data one university page contributed 67 addresses.
+    maxEmailsPerPage: 5
+    maxEmailsPerDomain: 25
+
+    recrawlAfterDays: 90
+
+    validation:
+      # Government bodies are not sales prospects.
+      excludeGovernment: true
+
+      # Universities were the single largest junk source in the legacy data:
+      # 146 of 597 addresses came from four of them. Turn this off only if you
+      # actually sell to institutions.
+      excludeEducation: true
+
+      blockedDomains: []
+
+      # info@/sales@ convert worse than a named person, but they still convert.
+      # They are flagged (is_role) rather than dropped.
+      keepRoleAddresses: true
+
 humanize:
   enabled: true
   # Delays are log-normal within these ranges, not uniform: human pauses cluster
