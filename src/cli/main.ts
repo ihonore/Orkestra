@@ -8,7 +8,7 @@
  * without going through argv.
  */
 import { pathToFileURL } from 'node:url';
-import { Command, Option } from 'commander';
+import { Command, InvalidArgumentError, Option } from 'commander';
 import { loadConfig } from '../config/loader.js';
 import type { LogLevel, ResolvedConfig } from '../config/schema.js';
 import { errorMessage, isAppError } from '../core/errors/taxonomy.js';
@@ -16,8 +16,12 @@ import { APP_VERSION } from '../version.js';
 import { runConfigShow } from './commands/config.js';
 import { runDbBackup, runDbCheck, runDbMigrate, runDbStatus, runDbVacuum } from './commands/db.js';
 import { runDoctor } from './commands/doctor.js';
+import { runImportCategories, runImportCities, runListSheets } from './commands/import.js';
 import { runInit } from './commands/init.js';
+import { runPlan } from './commands/plan.js';
+import { runJobsList, runJobsRetry, runStatus } from './commands/status.js';
 import { style, symbol } from './output.js';
+import type { JobStatus } from '../db/repositories/jobs.js';
 
 interface GlobalOptions {
   readonly config?: string;
@@ -41,6 +45,42 @@ function configFrom(program: Command): ResolvedConfig {
     ...(options.config !== undefined ? { configFile: options.config } : {}),
     overrides,
   });
+}
+
+const JOB_STATUS_CHOICES: readonly string[] = [
+  'pending',
+  'leased',
+  'done',
+  'failed',
+  'skipped',
+  'paused',
+];
+
+/** Parse a `--limit` style flag, rejecting nonsense rather than passing NaN on. */
+function toInt(value: string): number {
+  const n = Number.parseInt(value, 10);
+  if (!Number.isFinite(n) || n < 1) {
+    throw new InvalidArgumentError('expected a positive integer');
+  }
+  return n;
+}
+
+/** Split a comma-separated flag, dropping blanks from trailing commas. */
+function splitList(value: string): string[] {
+  return value
+    .split(',')
+    .map((s) => s.trim())
+    .filter((s) => s !== '');
+}
+
+/**
+ * A `--sheet` flag is a name or a 1-based index.
+ *
+ * A sheet legitimately named "2" is indistinguishable from index 2 here; the
+ * numeric reading wins, which is the far more common intent.
+ */
+function sheetSelector(value: string): string | number {
+  return /^\d+$/.test(value) ? Number.parseInt(value, 10) : value;
 }
 
 function fail(error: unknown): never {
@@ -112,6 +152,134 @@ export function buildProgram(): Command {
         config: configFrom(program),
         resolved: options.resolved,
         json: options.json,
+      });
+    });
+
+  const importCmd = program.command('import').description('load seed data');
+  importCmd
+    .command('cities')
+    .description('import cities from a spreadsheet or CSV')
+    .argument('<file>', 'path to the .xlsx or .csv file')
+    .option('-s, --sheet <name>', 'sheet name or 1-based index (default: first sheet)')
+    .option('--dry-run', 'parse and report without writing', false)
+    .option('--json', 'emit machine-readable output', false)
+    .action(async (file: string, options: { sheet?: string; dryRun: boolean; json: boolean }) => {
+      await runImportCities({
+        config: configFrom(program),
+        file,
+        ...(options.sheet !== undefined && { sheet: sheetSelector(options.sheet) }),
+        dryRun: options.dryRun,
+        json: options.json,
+      });
+    });
+  importCmd
+    .command('categories')
+    .description('import categories/services from a spreadsheet or CSV')
+    .argument('<file>', 'path to the .xlsx or .csv file')
+    .option('-s, --sheet <name>', 'sheet name or 1-based index (default: first sheet)')
+    .option('--dry-run', 'parse and report without writing', false)
+    .option('--json', 'emit machine-readable output', false)
+    .action(async (file: string, options: { sheet?: string; dryRun: boolean; json: boolean }) => {
+      await runImportCategories({
+        config: configFrom(program),
+        file,
+        ...(options.sheet !== undefined && { sheet: sheetSelector(options.sheet) }),
+        dryRun: options.dryRun,
+        json: options.json,
+      });
+    });
+  importCmd
+    .command('sheets')
+    .description('list the sheets in a workbook')
+    .argument('<file>', 'path to the .xlsx file')
+    .action(async (file: string) => {
+      await runListSheets(file);
+    });
+
+  program
+    .command('plan')
+    .description('create jobs from seed data (idempotent)')
+    .option('-a, --automation <id>', 'automation id', 'google-maps')
+    .option('--cities <list>', 'comma-separated city names, zips or state codes')
+    .option('--categories <list>', 'comma-separated category names or slugs')
+    .option('--limit <n>', 'cap the number of jobs, highest priority first', toInt)
+    .option('--dry-run', 'report what would be created without writing', false)
+    .option('--json', 'emit machine-readable output', false)
+    .action(
+      (options: {
+        automation: string;
+        cities?: string;
+        categories?: string;
+        limit?: number;
+        dryRun: boolean;
+        json: boolean;
+      }) => {
+        runPlan({
+          config: configFrom(program),
+          automationId: options.automation,
+          ...(options.cities !== undefined && { cities: splitList(options.cities) }),
+          ...(options.categories !== undefined && { categories: splitList(options.categories) }),
+          ...(options.limit !== undefined && { limit: options.limit }),
+          dryRun: options.dryRun,
+          json: options.json,
+        });
+      },
+    );
+
+  program
+    .command('status')
+    .description('show queue progress, throughput and ETA')
+    .option('-a, --automation <id>', 'restrict to one automation')
+    .option('--json', 'emit machine-readable output', false)
+    .action((options: { automation?: string; json: boolean }) => {
+      runStatus({
+        config: configFrom(program),
+        ...(options.automation !== undefined && { automationId: options.automation }),
+        json: options.json,
+      });
+    });
+
+  const jobs = program.command('jobs').description('inspect and steer individual jobs');
+  jobs
+    .command('list')
+    .description('list jobs')
+    .option('-a, --automation <id>', 'restrict to one automation')
+    .addOption(new Option('-s, --status <status>', 'filter by status').choices(JOB_STATUS_CHOICES))
+    .option('--error-kind <kind>', 'filter by last error kind, e.g. lease_expired')
+    .option('-n, --limit <n>', 'maximum rows', toInt, 50)
+    .option('--json', 'emit machine-readable output', false)
+    .action(
+      (options: {
+        automation?: string;
+        status?: JobStatus;
+        errorKind?: string;
+        limit: number;
+        json: boolean;
+      }) => {
+        runJobsList({
+          config: configFrom(program),
+          ...(options.automation !== undefined && { automationId: options.automation }),
+          ...(options.status !== undefined && { status: options.status }),
+          ...(options.errorKind !== undefined && { errorKind: options.errorKind }),
+          limit: options.limit,
+          json: options.json,
+        });
+      },
+    );
+  jobs
+    .command('retry')
+    .description('return failed or paused jobs to pending')
+    .argument('[ids...]', 'specific job ids (default: all failed and paused)')
+    .option('-a, --automation <id>', 'restrict to one automation')
+    .addOption(
+      new Option('-s, --status <status>', 'retry jobs in this status').choices(JOB_STATUS_CHOICES),
+    )
+    .action((ids: string[], options: { automation?: string; status?: JobStatus }) => {
+      runJobsRetry({
+        config: configFrom(program),
+        ...(options.automation !== undefined && { automationId: options.automation }),
+        ...(options.status !== undefined && { status: options.status }),
+        ...(ids.length > 0 && { ids: ids.map((id) => Number.parseInt(id, 10)) }),
       });
     });
 

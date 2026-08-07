@@ -57,6 +57,8 @@ export default tseslint.config(
     rules: {
       '@typescript-eslint/no-non-null-assertion': 'off',
       '@typescript-eslint/no-unsafe-assignment': 'off',
+      // Test fixtures are standalone scripts that report through stdout.
+      'no-console': 'off',
     },
   },
 );

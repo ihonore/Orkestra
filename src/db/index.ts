@@ -26,7 +26,30 @@ export {
   type MigrateOptions,
   type MigrateResult,
 } from './migrate.js';
+export { busyBackoffMs, isBusyError, retryOnBusy, type BusyRetryOptions } from './busy.js';
 export { META_KEYS, MetaRepository, type MetaEntry } from './repositories/meta.js';
+export {
+  JOB_STATUSES,
+  JobsRepository,
+  failureBackoffMs,
+  type ClaimOptions,
+  type EnqueueResult,
+  type FailOptions,
+  type JobCounts,
+  type JobRecord,
+  type JobSpec,
+  type JobStatus,
+  type Lease,
+} from './repositories/jobs.js';
+export {
+  CategoriesRepository,
+  CitiesRepository,
+  type CategoryInput,
+  type CategoryRecord,
+  type CityInput,
+  type CityRecord,
+  type UpsertResult,
+} from './repositories/seeds.js';
 export {
   BaseRepository,
   type Repository,

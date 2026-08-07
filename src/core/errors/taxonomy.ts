@@ -13,6 +13,13 @@ export type ErrorCode =
   | 'DB_PATH_UNSAFE'
   | 'DB_MIGRATION_FAILED'
   | 'DB_OPEN_FAILED'
+  | 'IMPORT_FILE_MISSING'
+  | 'IMPORT_SHEET_MISSING'
+  | 'IMPORT_READ_FAILED'
+  | 'IMPORT_EMPTY'
+  | 'IMPORT_MISSING_COLUMN'
+  | 'PLAN_NO_SEEDS'
+  | 'PLAN_NO_MATCH'
   | 'PLATFORM_UNSUPPORTED'
   | 'FATAL';
 
@@ -51,6 +58,8 @@ export class AppError extends Error {
 export class ConfigError extends AppError {}
 export class DatabaseError extends AppError {}
 export class PlatformError extends AppError {}
+/** Bad or unreadable seed data. Always a user-fixable input problem. */
+export class ImportError extends AppError {}
 
 export function isAppError(value: unknown): value is AppError {
   return (
