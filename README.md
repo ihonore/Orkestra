@@ -79,24 +79,31 @@ from the project directory — e.g. `npm run gms -- ui --control`.
 
 ## Commands
 
+Full reference, including every flag and the things that will surprise you:
+**[docs/COMMANDS.md](docs/COMMANDS.md)**. `gms help <command>` prints the same
+flags from the CLI itself.
+
 | Command | Purpose |
 | --- | --- |
 | `gms init` | Scaffold `gms.config.yaml` and the `data/` tree |
-| `gms doctor [--json]` | Verify Node, the native binding, paths, database and migrations |
-| `gms config show [--resolved] [--json]` | Print the merged config with secrets redacted |
-| `gms db migrate [--dry-run]` | Apply pending migrations |
-| `gms db status [--json]` | Database and migration state |
-| `gms db check` | Full integrity check |
-| `gms db vacuum` | Compact and reclaim free pages |
-| `gms import cities\|categories <file>` | Load seed data from xlsx/CSV |
-| `gms plan` | Create jobs from seeds (idempotent) |
+| `gms doctor [--all]` | Verify Node, the native binding, paths, database, migrations, and — with `--all` — the browser, proxies and Sheets |
+| `gms config show [--resolved]` | Print the merged config with secrets redacted |
+| `gms import sheets <file>` | List the tabs in a workbook, so you know what to pass to `--sheet` |
+| `gms import cities\|categories <file>` | Load seed data from xlsx/CSV, repairing leading zeros |
+| `gms plan` | Create jobs from seeds (safe to re-run) |
 | `gms run` | Scrape Google Maps into the database |
 | `gms enrich emails` | Crawl business websites for contact addresses |
-| `gms status [--by city\|category\|state]` | Queue progress, per-group breakdown |
+| `gms status [--by city\|category\|state]` | Queue progress, throughput, ETA |
 | `gms jobs list\|retry` | Inspect and steer individual jobs |
+| `gms ui [--control]` | Local dashboard — run the whole pipeline from a browser |
 | `gms export csv [--entity ...]` | Export results, resuming from the last position |
+| `gms export sheets` | Push results to a shared Google Sheet ([setup](docs/GOOGLE_SHEETS.md)) |
 | `gms export status` | Where each exporter has reached |
+| `gms db migrate\|status\|check\|vacuum` | Database maintenance |
 | `gms db backup <path>` | Consistent copy, safe while the database is in use |
+
+Global flags work with any command, before or after it: `-c, --config <path>`,
+`--data-dir <path>`, `--log-level <level>`. Most commands also take `--json`.
 
 ## Configuration
 
