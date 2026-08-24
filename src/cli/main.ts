@@ -375,8 +375,12 @@ export function buildProgram(): Command {
     .description('open the local dashboard — run everything from a browser')
     .option('-p, --port <n>', 'port to listen on', toInt, 4600)
     .option('--no-open', 'do not open a browser window')
+    // No `-c` short form: the program's own `-c, --config <path>` shadows it, so
+    // `gms ui -c` fails asking for a config path and `gms ui -c x.yaml` starts a
+    // view-only dashboard. Advertising a short flag that cannot work is worse
+    // than having none.
     .option(
-      '-c, --control',
+      '--control',
       'let the page start scrapes, imports and exports, and edit settings',
       false,
     )
@@ -419,24 +423,33 @@ export function buildProgram(): Command {
     .option('--crlf', 'use Windows line endings', false)
     .option('--json', 'emit machine-readable output', false)
     .action(
-      (options: {
-        entity: string;
-        outDir?: string;
-        full: boolean;
-        splitBy?: string;
-        excelSafe: boolean;
-        bom: boolean;
-        crlf: boolean;
-        json: boolean;
-      }) => {
+      (
+        options: {
+          entity: string;
+          outDir?: string;
+          full: boolean;
+          splitBy?: string;
+          excelSafe: boolean;
+          bom: boolean;
+          crlf: boolean;
+          json: boolean;
+        },
+        command: Command,
+      ) => {
+        // These two also exist in the config file, so the flag must only win
+        // when it was actually typed. Commander gives both a value either way
+        // (`--no-bom` in particular defaults `bom` to true), which is why the
+        // source has to be asked for rather than inferred from the value.
+        const typed = (name: string): boolean => command.getOptionValueSource(name) !== 'default';
+
         runExportCsv({
           config: configFrom(program),
           entity: options.entity,
           ...(options.outDir !== undefined && { outDir: options.outDir }),
           full: options.full,
           ...(options.splitBy !== undefined && { splitBy: options.splitBy }),
-          excelSafe: options.excelSafe,
-          bom: options.bom,
+          ...(typed('excelSafe') && { excelSafe: options.excelSafe }),
+          ...(typed('bom') && { bom: options.bom }),
           crlf: options.crlf,
           json: options.json,
         });

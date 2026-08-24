@@ -61,9 +61,13 @@ export function runExportCsv(options: ExportCsvOptions): void {
     const start = cursors.cursor('csv', target, entity);
     const pending = countRemaining(driver, schema, start);
     const writers = new Map<string, CsvWriter>();
+    // Flag if given, config otherwise. Both keys ship in the starter config and
+    // were previously read by nothing at all, so a project that set
+    // `exporters.csv.bom: false` still got a byte-order mark.
+    const csvSettings = options.config.exporters.csv;
     const csvOptions = {
-      excelSafeText: options.excelSafe === true,
-      bom: options.bom !== false,
+      excelSafeText: options.excelSafe ?? csvSettings.excelSafeText,
+      bom: options.bom ?? csvSettings.bom,
       newline: options.crlf === true ? ('\r\n' as const) : ('\n' as const),
       // --full starts the cursor over, so the file must start over too.
       replace: options.full === true,

@@ -14,7 +14,9 @@ import { migrate } from '../src/db/migrate.js';
 import { ExportsRepository } from '../src/db/repositories/exports.js';
 import { LEADS_FLAT, VIEWS } from '../src/views/index.js';
 import type { FieldDef, RecordSchema } from '../src/views/index.js';
-import { cleanupTempDirs, tempDir } from './helpers.js';
+import { loadConfig } from '../src/config/loader.js';
+import { runExportCsv } from '../src/cli/commands/export.js';
+import { cleanupTempDirs, tempDir, writeFile } from './helpers.js';
 
 afterEach(cleanupTempDirs);
 
@@ -139,7 +141,7 @@ describe('CsvWriter', () => {
     writer.write([{ name: 'B' }]);
 
     const content = fs.readFileSync(file, 'utf8');
-    expect(content.startsWith('﻿')).toBe(true);
+    expect(content.startsWith('\ufeff')).toBe(true);
     expect(content.split('﻿')).toHaveLength(2);
   });
 
@@ -282,5 +284,55 @@ describe('view schemas', () => {
 
   it('orders by the cursor column so pagination cannot skip rows', () => {
     expect(LEADS_FLAT.sql).toMatch(/ORDER BY b\.id/);
+  });
+});
+
+describe('csv settings come from the config as well as the flags', () => {
+  /** A project whose config sets the two csv keys. */
+  function project(csv: string): ReturnType<typeof loadConfig> {
+    const root = tempDir();
+    writeFile(root, 'gms.config.yaml', `project:\n  name: test\nexporters:\n  csv:\n${csv}`);
+    const config = loadConfig({ cwd: root, env: {} });
+    fs.mkdirSync(config.paths.dataDir, { recursive: true });
+    const driver = openDatabase({ file: config.paths.databaseFile });
+    migrate(driver);
+    driver
+      .prepare(
+        `INSERT INTO businesses (dedup_hash, name, postal_code, automation_id,
+                                 first_seen_at, last_seen_at)
+         VALUES ('h1', 'Acme', '02108', 'google-maps', 0, 0)`,
+      )
+      .run();
+    driver.close();
+    return config;
+  }
+
+  function exported(config: ReturnType<typeof loadConfig>): string {
+    const outDir = tempDir();
+    runExportCsv({ config, outDir, json: true });
+    return fs.readFileSync(path.join(outDir, 'leads-flat.csv'), 'utf8');
+  }
+
+  it('honours exporters.csv.bom', () => {
+    // Both keys ship in the starter config and were read by nothing at all, so
+    // a project that turned the byte-order mark off still got one.
+    expect(exported(project('    bom: false\n')).startsWith('\ufeff')).toBe(false);
+    expect(exported(project('    bom: true\n')).startsWith('\ufeff')).toBe(true);
+  });
+
+  it('honours exporters.csv.excelSafeText', () => {
+    // The Excel form is itself a quoted CSV field, so its quotes are doubled.
+    expect(exported(project('    excelSafeText: true\n'))).toContain('"=""02108"""');
+    expect(exported(project('    excelSafeText: false\n'))).toContain(',02108,');
+  });
+
+  it('lets the flag beat the config', () => {
+    const config = project('    excelSafeText: false\n    bom: true\n');
+    const outDir = tempDir();
+    runExportCsv({ config, outDir, json: true, excelSafe: true, bom: false });
+    const csv = fs.readFileSync(path.join(outDir, 'leads-flat.csv'), 'utf8');
+
+    expect(csv).toContain('"=""02108"""');
+    expect(csv.startsWith('\ufeff')).toBe(false);
   });
 });

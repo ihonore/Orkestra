@@ -489,7 +489,7 @@ async function loadControl() {
 
   $('#ctl-sub').textContent = t.enabled
     ? 'Run everything from here. Each step unlocks when the one before it is done.'
-    : 'Read-only. Restart with --allow-control to run tasks from this page.';
+    : 'Read-only. Restart with --control to run tasks from this page.';
 
   const hasSeeds = o.seeds.cities > 0 && o.seeds.categories > 0;
   const hasJobs = o.jobsTotal > 0;
@@ -808,10 +808,23 @@ async function loadIssues() {
 }
 
 $('#retry').addEventListener('click', async () => {
-  const r = await fetch('/api/jobs/retry', { method: 'POST' }).then((x) => x.json());
-  $('#retry').textContent = 'Requeued ' + r.retried;
+  const res = await fetch('/api/jobs/retry', { method: 'POST' });
+  const r = await res.json();
+  // Retrying is a write, so the server refuses it without --control. Say what
+  // happened rather than rendering "Requeued undefined".
+  $('#retry').textContent = res.ok ? 'Requeued ' + r.retried : r.error || 'Not allowed';
+  if (!res.ok) return;
   loadIssues(); loadOverview();
 });
+
+/** Disable the retry button when this dashboard cannot write. */
+async function syncRetryButton() {
+  const t = await get('/api/tasks').catch(() => ({ enabled: false }));
+  const button = $('#retry');
+  button.disabled = !t.enabled;
+  button.title = t.enabled ? '' : 'Read-only. Restart with --control to retry from this page.';
+}
+syncRetryButton();
 
 // ── Settings ───────────────────────────────────────────────────────────
 async function loadConfig() {

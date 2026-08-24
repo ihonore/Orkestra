@@ -125,6 +125,13 @@ export async function runGoogleMapsJob(options: RunJobOptions): Promise<JobOutco
   const query = buildQuery(target);
   const tracker = new FillRateTracker();
 
+  // A function, not a bare property read. TypeScript narrows
+  // `options.signal.aborted` at the first check and keeps that narrowing across
+  // the awaits that follow, so every later check would be flagged as
+  // unreachable — while in reality those awaits are exactly when the signal
+  // fires. Reading it through a call keeps each check honest.
+  const aborted = (): boolean => options.signal?.aborted === true;
+
   let cursor: GoogleMapsCursor = options.cursor ?? INITIAL_CURSOR;
   let consentAttempts = 0;
 
@@ -174,6 +181,13 @@ export async function runGoogleMapsJob(options: RunJobOptions): Promise<JobOutco
         initialUrls: cursor.urls,
       });
 
+      // Stop here if the signal fired during the harvest. Everything below
+      // treats `scroll` as a finished harvest — including the `no-feed` branch,
+      // which would record the search page itself as a place URL.
+      if (aborted()) {
+        return { kind: 'aborted', extracted: 0 };
+      }
+
       if (scroll.reason === 'no-feed') {
         // No feed: either the query resolved straight to one place, or we were
         // blocked. assertNotBlocked already ruled out the latter.
@@ -205,8 +219,17 @@ export async function runGoogleMapsJob(options: RunJobOptions): Promise<JobOutco
     // ── Phase 2: visit each place and extract ────────────────────────────────
     let extracted = 0;
 
+    // The loop below checks the signal per listing, but an abort during search
+    // or harvest leaves nothing to iterate: the body never runs, the function
+    // falls through to `ok`, and the job is marked done with zero results —
+    // marking that city and category permanently scraped. Observed for real:
+    // four jobs finished `done` with result_count 0 after one Ctrl-C.
+    if (aborted()) {
+      return { kind: 'aborted', extracted };
+    }
+
     for (let index = cursor.processedIndex; index < cursor.urls.length; index += 1) {
-      if (options.signal?.aborted === true) {
+      if (aborted()) {
         return { kind: 'aborted', extracted };
       }
 

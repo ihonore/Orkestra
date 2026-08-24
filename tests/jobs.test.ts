@@ -324,6 +324,75 @@ describe('failure and retry', () => {
   });
 });
 
+describe('release on shutdown', () => {
+  it('makes an interrupted job immediately claimable again', () => {
+    // Leaving the lease to expire instead means the job is invisible for the
+    // whole of jobLeaseSeconds: the claim only sees 'pending' and the reaper
+    // only sees expired leases. Stop a run and restart it, and the queue looks
+    // empty while every in-flight job sits idle for five minutes.
+    const { jobs, driver } = freshQueue();
+    try {
+      jobs.enqueue([{ automationId: 'test', taskKey: 'interrupted', params: {} }]);
+      const lease = jobs.claim(CLAIM)!;
+
+      expect(jobs.release(lease)).toBe(true);
+      expect(jobs.byId(lease.job.id)!.status).toBe('pending');
+      expect(jobs.claim(CLAIM)?.job.id).toBe(lease.job.id);
+    } finally {
+      driver.close();
+    }
+  });
+
+  it('keeps the checkpoint, so the job resumes rather than restarts', () => {
+    const { jobs, driver } = freshQueue();
+    try {
+      jobs.enqueue([{ automationId: 'test', taskKey: 'interrupted', params: {} }]);
+      const lease = jobs.claim(CLAIM)!;
+      jobs.saveCheckpoint(lease, { processedIndex: 73 });
+
+      jobs.release(lease);
+
+      const next = jobs.claim(CLAIM)!;
+      expect(jobs.checkpoint(next.job.id)).toEqual({ processedIndex: 73 });
+    } finally {
+      driver.close();
+    }
+  });
+
+  it('costs no error and no backoff, because nothing went wrong', () => {
+    const { jobs, driver } = freshQueue();
+    try {
+      jobs.enqueue([{ automationId: 'test', taskKey: 'interrupted', params: {} }]);
+      const lease = jobs.claim(CLAIM)!;
+      jobs.release(lease);
+
+      const after = jobs.byId(lease.job.id)!;
+      expect(after.last_error).toBeNull();
+      expect(after.attempts).toBe(1); // the one it already spent, not a second
+    } finally {
+      driver.close();
+    }
+  });
+
+  it('is fenced, so a worker that lost its lease cannot un-claim it', () => {
+    // The hazard the reaper creates: the old owner may still be alive.
+    const { jobs, driver } = freshQueue();
+    try {
+      jobs.enqueue([{ automationId: 'test', taskKey: 'interrupted', params: {} }]);
+      const stale = jobs.claim(CLAIM)!;
+
+      driver.prepare(`UPDATE jobs SET lease_expires_at = 1 WHERE id = ?`).run([stale.job.id]);
+      jobs.reap();
+      const fresh = jobs.claim(CLAIM)!;
+
+      expect(jobs.release(stale)).toBe(false);
+      expect(jobs.byId(fresh.job.id)!.status).toBe('leased');
+    } finally {
+      driver.close();
+    }
+  });
+});
+
 describe('checkpoints', () => {
   it('round-trips a resume cursor', () => {
     const { jobs, driver } = freshQueue();

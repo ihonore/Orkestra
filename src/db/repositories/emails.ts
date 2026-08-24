@@ -34,6 +34,8 @@ export interface DomainRecord {
   readonly domain: string;
   readonly status: string;
   readonly next_eligible_at: number | null;
+  /** The claim's fencing token. Carry it on every write for this domain. */
+  readonly crawl_epoch: number;
   /** A real website URL observed for this domain, if any business has one. */
   readonly known_url: string | null;
 }
@@ -72,7 +74,16 @@ export class EmailsRepository extends BaseRepository {
        ON CONFLICT (address) DO UPDATE SET
          -- An address previously seen as junk can be re-classified when the
          -- rules change; the reverse must also hold.
-         is_junk = :isJunk, junk_reason = :junkReason
+         is_junk = :isJunk, junk_reason = :junkReason,
+         -- Refresh the classification only when this write is a real verdict.
+         -- A junk verdict carries no meaningful is_role/is_free — the rules
+         -- stop at the first reason to reject — so letting one overwrite them
+         -- would blank the flags on an address that is fine. But an address
+         -- first stored as a reject and later accepted must not keep the
+         -- placeholder flags either, which is what re-running with looser
+         -- rules does.
+         is_role = CASE WHEN :isJunk = 0 THEN :isRole ELSE is_role END,
+         is_free = CASE WHEN :isJunk = 0 THEN :isFree ELSE is_free END
        RETURNING id`,
     );
 
@@ -92,7 +103,8 @@ export class EmailsRepository extends BaseRepository {
     // never crawl the same domain.
     this.#claimDomain = driver.prepare<DomainRecord>(
       `UPDATE domains
-          SET status = 'crawling', last_crawled_at = :now
+          SET status = 'crawling', last_crawled_at = :now,
+              crawl_epoch = crawl_epoch + 1
         WHERE id = (
           SELECT id FROM domains
            WHERE status = 'pending'
@@ -101,7 +113,7 @@ export class EmailsRepository extends BaseRepository {
            ORDER BY id
            LIMIT 1
         )
-       RETURNING id, domain, status, next_eligible_at,
+       RETURNING id, domain, status, next_eligible_at, crawl_epoch,
                  -- The real URL Google gave us, which is far better than a
                  -- constructed https://<domain>: many sites 404 on the bare
                  -- apex and only answer on www, and some live on a path
@@ -120,7 +132,7 @@ export class EmailsRepository extends BaseRepository {
               bytes_fetched = bytes_fetched + :bytesFetched,
               emails_found = :emailsFound, error = :error,
               last_crawled_at = :now, next_eligible_at = :nextEligibleAt
-        WHERE id = :id`,
+        WHERE id = :id AND crawl_epoch = :epoch`,
     );
 
     this.#isSuppressed = driver.prepare<{ n: number }>(
@@ -166,21 +178,79 @@ export class EmailsRepository extends BaseRepository {
     return this.#claimDomain.get({ now }) ?? null;
   }
 
-  finishDomain(id: number, outcome: DomainCrawlOutcome, now: Timestamp = Date.now()): void {
-    this.#finishDomain.run({
-      id,
-      status: outcome.status,
-      httpStatus: outcome.httpStatus,
-      finalUrl: outcome.finalUrl,
-      isParked: outcome.isParked ? 1 : 0,
-      isDirectoryLike: outcome.isDirectoryLike ? 1 : 0,
-      pagesFetched: outcome.pagesFetched,
-      bytesFetched: outcome.bytesFetched,
-      emailsFound: outcome.emailsFound,
-      error: outcome.error,
-      nextEligibleAt: outcome.nextEligibleAt,
-      now,
-    });
+  /**
+   * Hand one domain back to the queue, unclaimed.
+   *
+   * Used when a worker stops before it finished — a graceful shutdown, or an
+   * error that is not the domain's fault. Without it the row stays 'crawling'
+   * forever: the claim only ever selects 'pending', so nothing would look at it
+   * again.
+   */
+  releaseDomain(id: number, epoch: number): boolean {
+    return (
+      this.driver
+        .prepare(
+          `UPDATE domains SET status = 'pending'
+            WHERE id = :id AND status = 'crawling' AND crawl_epoch = :epoch`,
+        )
+        .run({ id, epoch }).changes === 1
+    );
+  }
+
+  /**
+   * Return domains abandoned by a dead process to the queue.
+   *
+   * The equivalent of the job queue's reaper, and it exists for the same
+   * reason: a worker killed mid-crawl leaves its domain claimed, and with no
+   * recovery path those sites are never enriched again. `last_crawled_at` is
+   * stamped at claim time, so it doubles as the lease clock.
+   *
+   * Deliberately generous — `leaseMs` should comfortably exceed the longest a
+   * single domain may take (`maxTimePerDomainMs`), because reclaiming a domain
+   * a live worker is still crawling would have both of them writing its
+   * results.
+   */
+  reclaimStalledDomains(leaseMs: number, now: Timestamp = Date.now()): number {
+    return this.driver
+      .prepare(
+        `UPDATE domains SET status = 'pending', crawl_epoch = crawl_epoch + 1
+          WHERE status = 'crawling'
+            AND (last_crawled_at IS NULL OR last_crawled_at < :cutoff)`,
+      )
+      .run({ cutoff: now - leaseMs }).changes;
+  }
+
+  /**
+   * Record the outcome of a crawl.
+   *
+   * Returns false when this worker no longer owns the claim — the reaper
+   * decided it was dead and someone else took the site. The results belong to a
+   * claim that no longer exists, so they are dropped rather than written over
+   * the new owner's.
+   */
+  finishDomain(
+    id: number,
+    epoch: number,
+    outcome: DomainCrawlOutcome,
+    now: Timestamp = Date.now(),
+  ): boolean {
+    return (
+      this.#finishDomain.run({
+        id,
+        epoch,
+        status: outcome.status,
+        httpStatus: outcome.httpStatus,
+        finalUrl: outcome.finalUrl,
+        isParked: outcome.isParked ? 1 : 0,
+        isDirectoryLike: outcome.isDirectoryLike ? 1 : 0,
+        pagesFetched: outcome.pagesFetched,
+        bytesFetched: outcome.bytesFetched,
+        emailsFound: outcome.emailsFound,
+        error: outcome.error,
+        nextEligibleAt: outcome.nextEligibleAt,
+        now,
+      }).changes === 1
+    );
   }
 
   /** Businesses whose website is on this domain, so found addresses can be linked. */

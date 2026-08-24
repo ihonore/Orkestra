@@ -1,4 +1,13 @@
-import { describe, expect, it } from 'vitest';
+import path from 'node:path';
+import { afterEach, describe, expect, it } from 'vitest';
+import { openDatabase } from '../src/db/client.js';
+import { migrate } from '../src/db/migrate.js';
+import { EmailsRepository } from '../src/db/repositories/emails.js';
+import type { SqliteDriver } from '../src/db/driver/types.js';
+import { crawlDomain } from '../src/enrichment/website-emails/crawler.js';
+import { cleanupTempDirs, tempDir } from './helpers.js';
+
+afterEach(cleanupTempDirs);
 import {
   decodeCfEmail,
   extractEmails,
@@ -306,5 +315,280 @@ describe('robots.txt', () => {
   it('ignores rules aimed at a different agent', () => {
     const rules = parseRobots('User-agent: BadBot\nDisallow: /\n\nUser-agent: *\nAllow: /');
     expect(rules.allowed('/contact')).toBe(true);
+  });
+});
+
+describe('the domain crawl queue', () => {
+  function queue(domains: string[]): { repo: EmailsRepository; driver: SqliteDriver } {
+    const driver = openDatabase({ file: path.join(tempDir(), 'domains.sqlite') });
+    migrate(driver);
+    for (const domain of domains) {
+      driver
+        .prepare(`INSERT INTO domains (domain, is_social, status, created_at) VALUES (?, 0, ?, 0)`)
+        .run([domain, 'pending']);
+    }
+    return { repo: new EmailsRepository(driver), driver };
+  }
+
+  const statusOf = (driver: SqliteDriver, domain: string): string =>
+    driver.prepare<{ status: string }>(`SELECT status FROM domains WHERE domain = ?`).get([domain])
+      ?.status ?? '';
+
+  it('hands an unfinished domain back rather than stranding it', () => {
+    // Ctrl-C mid-crawl used to leave the row 'crawling' forever: the claim only
+    // ever selects 'pending', so that site was never enriched again.
+    const { repo, driver } = queue(['acme.com']);
+    const claimed = repo.claimDomain();
+    expect(claimed?.domain).toBe('acme.com');
+    expect(statusOf(driver, 'acme.com')).toBe('crawling');
+
+    repo.releaseDomain(claimed!.id, claimed!.crawl_epoch);
+
+    expect(statusOf(driver, 'acme.com')).toBe('pending');
+    expect(repo.claimDomain()?.domain).toBe('acme.com');
+  });
+
+  it('never resurrects a domain that actually finished', () => {
+    const { repo, driver } = queue(['acme.com']);
+    const claimed = repo.claimDomain()!;
+    repo.finishDomain(claimed.id, claimed.crawl_epoch, {
+      status: 'done',
+      httpStatus: 200,
+      finalUrl: 'https://acme.com/',
+      isParked: false,
+      isDirectoryLike: false,
+      pagesFetched: 3,
+      bytesFetched: 1000,
+      emailsFound: 2,
+      error: null,
+      nextEligibleAt: Date.now() + 1000,
+    });
+
+    repo.releaseDomain(claimed.id, claimed.crawl_epoch);
+    expect(statusOf(driver, 'acme.com')).toBe('done');
+  });
+
+  it('reclaims domains abandoned by a process that died', () => {
+    // The job queue has a reaper for exactly this; the domain queue had none.
+    const { repo, driver } = queue(['acme.com', 'beta.com']);
+    const stale = repo.claimDomain()!;
+    driver
+      .prepare(`UPDATE domains SET last_crawled_at = ? WHERE id = ?`)
+      .run([Date.now() - 3_600_000, stale.id]);
+
+    expect(repo.reclaimStalledDomains(600_000)).toBe(1);
+    expect(statusOf(driver, 'acme.com')).toBe('pending');
+  });
+
+  it('fences a reclaimed domain, so the old owner cannot write over the new one', () => {
+    // The hazard the reaper creates: the worker it declared dead may be alive.
+    // Guarding on status='crawling' is not enough — the new owner has put the
+    // row back into exactly that state.
+    const { repo, driver } = queue(['acme.com']);
+    const stale = repo.claimDomain()!;
+    driver
+      .prepare(`UPDATE domains SET last_crawled_at = ? WHERE id = ?`)
+      .run([Date.now() - 3_600_000, stale.id]);
+    repo.reclaimStalledDomains(600_000);
+    const fresh = repo.claimDomain()!;
+
+    expect(fresh.crawl_epoch).toBeGreaterThan(stale.crawl_epoch);
+    expect(repo.releaseDomain(stale.id, stale.crawl_epoch)).toBe(false);
+    expect(
+      repo.finishDomain(stale.id, stale.crawl_epoch, {
+        status: 'done',
+        httpStatus: 200,
+        finalUrl: null,
+        isParked: false,
+        isDirectoryLike: false,
+        pagesFetched: 1,
+        bytesFetched: 1,
+        emailsFound: 99,
+        error: null,
+        nextEligibleAt: null,
+      }),
+    ).toBe(false);
+
+    // The new owner still holds it, and none of the stale results landed.
+    expect(statusOf(driver, 'acme.com')).toBe('crawling');
+    expect(
+      driver
+        .prepare<{ n: number }>(`SELECT emails_found AS n FROM domains WHERE id = ?`)
+        .get([fresh.id])?.n,
+    ).toBe(0);
+  });
+
+  it('leaves a worker that is merely slow alone', () => {
+    const { repo, driver } = queue(['acme.com']);
+    const claimed = repo.claimDomain()!;
+
+    expect(repo.reclaimStalledDomains(600_000)).toBe(0);
+    expect(statusOf(driver, 'acme.com')).toBe('crawling');
+    expect(claimed.domain).toBe('acme.com');
+  });
+});
+
+describe('rejected addresses are recorded, not silently dropped', () => {
+  /** A one-page site serving one usable address and two the rules reject. */
+  async function site(html: string): Promise<{ url: string; close: () => Promise<void> }> {
+    const { createServer } = await import('node:http');
+    const server = createServer((req, res) => {
+      if (req.url === '/robots.txt') {
+        res.writeHead(404).end();
+        return;
+      }
+      res.writeHead(200, { 'content-type': 'text/html' }).end(html);
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const port = (server.address() as { port: number }).port;
+    return {
+      url: `http://127.0.0.1:${port}/`,
+      close: () => new Promise<void>((resolve) => server.close(() => resolve())),
+    };
+  }
+
+  it('keeps what a rule threw away, with the reason', async () => {
+    // A validation rule that is too aggressive is invisible if its verdicts are
+    // discarded — and one already cost this project a real law firm's address,
+    // read as an image filename. The rejects are stored so the rule can be
+    // reviewed; they are never linked to a business and never exported.
+    const page = await site(
+      `<a href="mailto:owner@acme.com">write</a>
+       <img src="logo@2x.png"> banner@3x.jpg
+       <span>3f9a1c2b4d5e6f70@sentry.io</span>`,
+    );
+    try {
+      const result = await crawlDomain({
+        domain: '127.0.0.1',
+        startUrl: page.url,
+        maxDepth: 0,
+        maxPages: 1,
+        maxTimeMs: 10_000,
+        maxBytes: 1_000_000,
+        maxEmailsPerPage: 5,
+        maxEmailsPerDomain: 25,
+        respectRobots: false,
+        perRequestDelayMs: [0, 0],
+      });
+
+      expect(result.emails.map((e) => e.verdict.address)).toEqual(['owner@acme.com']);
+      expect(result.rejected.length).toBeGreaterThan(0);
+      for (const rejected of result.rejected) {
+        expect(rejected.verdict.isJunk).toBe(true);
+        expect(rejected.verdict.junkReason).not.toBeNull();
+        // The crawler canonicalises URLs, so the trailing slash is normalised away.
+        expect(rejected.sourceUrl).toBe(page.url.replace(/\/$/, ''));
+      }
+    } finally {
+      await page.close();
+    }
+  });
+
+  it('does not let rejects eat the per-domain budget', async () => {
+    // Junk is bounded by the same ceiling as real addresses, so a staff
+    // directory cannot fill the table — but it must not crowd out real finds.
+    const junk = Array.from({ length: 40 }, (_, i) => `icon${i}@2x.png`).join(' ');
+    const page = await site(`<a href="mailto:owner@acme.com">write</a> ${junk}`);
+    try {
+      const result = await crawlDomain({
+        domain: '127.0.0.1',
+        startUrl: page.url,
+        maxDepth: 0,
+        maxPages: 1,
+        maxTimeMs: 10_000,
+        maxBytes: 1_000_000,
+        maxEmailsPerPage: 5,
+        maxEmailsPerDomain: 25,
+        respectRobots: false,
+        perRequestDelayMs: [0, 0],
+      });
+
+      expect(result.emails.map((e) => e.verdict.address)).toEqual(['owner@acme.com']);
+      expect(result.rejected.length).toBeLessThanOrEqual(25);
+    } finally {
+      await page.close();
+    }
+  });
+});
+
+describe('re-classifying an address', () => {
+  function repo(): { repo: EmailsRepository; driver: SqliteDriver } {
+    const driver = openDatabase({ file: path.join(tempDir(), 'reclass.sqlite') });
+    migrate(driver);
+    return { repo: new EmailsRepository(driver), driver };
+  }
+
+  const row = (driver: SqliteDriver, address: string) =>
+    driver
+      .prepare<{ is_junk: number; is_role: number; is_free: number; junk_reason: string | null }>(
+        `SELECT is_junk, is_role, is_free, junk_reason FROM emails WHERE address = ?`,
+      )
+      .get([address]);
+
+  it('repairs the flags when a rejected address is later accepted', () => {
+    // A junk verdict carries placeholder flags — the rules stop at the first
+    // reason to reject, so is_role/is_free were never worked out. Storing
+    // rejects made that the *first* row for an address, and the conflict clause
+    // never refreshed those columns: re-running with looser rules produced a
+    // usable address permanently mislabelled as neither role nor free.
+    const { repo: emails, driver } = repo();
+    emails.upsertEmail({
+      address: 'info@acme.com',
+      localPart: 'info',
+      domain: 'acme.com',
+      isRole: false,
+      isFree: false,
+      isJunk: true,
+      junkReason: 'blocked_domain',
+    });
+
+    emails.upsertEmail({
+      address: 'info@acme.com',
+      localPart: 'info',
+      domain: 'acme.com',
+      isRole: true,
+      isFree: false,
+      isJunk: false,
+      junkReason: null,
+    });
+
+    expect(row(driver, 'info@acme.com')).toEqual({
+      is_junk: 0,
+      is_role: 1,
+      is_free: 0,
+      junk_reason: null,
+    });
+  });
+
+  it('does not let a junk verdict blank the flags on a good address', () => {
+    // The reverse direction must not repair anything: a junk verdict has no
+    // opinion about is_role/is_free, so it must leave them alone.
+    const { repo: emails, driver } = repo();
+    emails.upsertEmail({
+      address: 'sales@acme.com',
+      localPart: 'sales',
+      domain: 'acme.com',
+      isRole: true,
+      isFree: true,
+      isJunk: false,
+      junkReason: null,
+    });
+
+    emails.upsertEmail({
+      address: 'sales@acme.com',
+      localPart: 'sales',
+      domain: 'acme.com',
+      isRole: false,
+      isFree: false,
+      isJunk: true,
+      junkReason: 'blocked_domain',
+    });
+
+    expect(row(driver, 'sales@acme.com')).toEqual({
+      is_junk: 1,
+      is_role: 1,
+      is_free: 1,
+      junk_reason: 'blocked_domain',
+    });
   });
 });

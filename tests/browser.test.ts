@@ -1,3 +1,4 @@
+import { readFile } from 'node:fs/promises';
 import { describe, expect, it } from 'vitest';
 import { AdaptiveConcurrency, detectBlock } from '../src/core/browser/block-detector.js';
 import { consentCacheKey, isConsentUrl } from '../src/core/browser/consent.js';
@@ -166,6 +167,20 @@ describe('consent', () => {
   });
 });
 
+describe('signal ownership', () => {
+  it('does not let Playwright install its own handlers', async () => {
+    // playwright-core's SIGINT handler closes every browser and then calls
+    // process.exit(130). With it installed, our graceful stop never got past
+    // starting the drain: no checkpoint, no summary, no database close. Its
+    // SIGTERM/SIGHUP handlers are quieter and worse — they close the browser
+    // under jobs that are still running.
+    const source = await readFile(new URL('../src/core/browser/pool.ts', import.meta.url), 'utf8');
+    expect(source).toContain('handleSIGINT: false');
+    expect(source).toContain('handleSIGTERM: false');
+    expect(source).toContain('handleSIGHUP: false');
+  });
+});
+
 describe('shutdown', () => {
   it('runs cleanup in reverse registration order', async () => {
     const order: string[] = [];
@@ -226,6 +241,94 @@ describe('shutdown', () => {
 
     await controller.shutdown('manual');
     expect(controller.completed).toBe(true);
+  });
+
+  it('lets in-flight work drain before the browser is taken away', async () => {
+    // `gms run` registers exactly this shape: wait for the worker loop to stop,
+    // then close the pool. Closing first killed the page a job was mid-scroll
+    // on, so the job died with a navigation error instead of committing the
+    // listings it already had — losing the work the grace period exists to save.
+    const order: string[] = [];
+    const controller = new ShutdownController({ graceSeconds: 5, exit: () => undefined });
+
+    const jobFinished = new Promise<void>((resolve) => {
+      setTimeout(() => {
+        order.push('job committed');
+        resolve();
+      }, 30);
+    });
+    controller.onShutdown('browser', async () => {
+      await jobFinished;
+      order.push('browser closed');
+    });
+
+    await controller.shutdown('SIGINT');
+    expect(order).toEqual(['job committed', 'browser closed']);
+  });
+
+  it('still bounds the wait, so a job that will not stop cannot hang the exit', async () => {
+    const controller = new ShutdownController({ graceSeconds: 0.05, exit: () => undefined });
+    controller.onShutdown('browser', () => new Promise(() => undefined));
+
+    const startedAt = Date.now();
+    await controller.shutdown('SIGINT');
+
+    expect(controller.completed).toBe(true);
+    expect(Date.now() - startedAt).toBeLessThan(2000);
+  });
+
+  it('closes the browser even when the drain never finishes', async () => {
+    // Losing the controller's race only logs — it cancels nothing. So the task
+    // has to carry its own deadline, and closing the pool is what unwedges a
+    // job stuck in a Playwright call: page.evaluate has no timeout of its own
+    // and rejects only when the browser goes away. Waiting on the drain with no
+    // deadline left the process alive with Chromium still running.
+    let closed = false;
+    const controller = new ShutdownController({ graceSeconds: 5, exit: () => undefined });
+    const neverDrains = new Promise(() => undefined);
+
+    controller.onShutdown('browser', async () => {
+      await Promise.race([neverDrains, new Promise((r) => setTimeout(r, 20))]);
+      closed = true;
+    });
+
+    await controller.shutdown('SIGINT');
+    expect(closed).toBe(true);
+  });
+
+  it('forces an exit when a stopped run will not end on its own', async () => {
+    // Playwright's SIGINT handler used to call process.exit(130), which hid any
+    // handle a stopped run leaked. Owning the signal means owning the exit too.
+    let exitCode: number | null = null;
+    const controller = new ShutdownController({
+      graceSeconds: 5,
+      exit: (code) => {
+        exitCode = code;
+      },
+    });
+
+    await controller.shutdown('SIGINT');
+    controller.exitWhenIdle(5);
+    await new Promise((r) => setTimeout(r, 40));
+
+    expect(exitCode).toBe(130);
+    expect(process.exitCode).toBe(130);
+    process.exitCode = 0; // do not fail the whole test run
+  });
+
+  it('does not force an exit for a run that finished on its own', async () => {
+    let exitCode: number | null = null;
+    const controller = new ShutdownController({
+      graceSeconds: 5,
+      exit: (code) => {
+        exitCode = code;
+      },
+    });
+
+    controller.exitWhenIdle(5);
+    await new Promise((r) => setTimeout(r, 40));
+
+    expect(exitCode).toBeNull();
   });
 
   it('registers SIGBREAK, which Playwright does not handle', () => {

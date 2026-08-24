@@ -21,6 +21,9 @@ import {
 import { CategoriesRepository, CitiesRepository } from '../../db/repositories/seeds.js';
 import { bar, formatDuration, heading, keyValue, percent, style, symbol } from '../output.js';
 
+/** The automation the grouped view falls back to when `-a` is not given. */
+const DEFAULT_AUTOMATION = 'google-maps';
+
 export interface StatusOptions {
   readonly config: ResolvedConfig;
   readonly automationId?: string;
@@ -84,8 +87,16 @@ export function runStatus(options: StatusOptions): void {
 
     if (options.by !== undefined) {
       const grouping = GROUPINGS[options.by];
+      // The grouped query needs an automation id. Defaulting it silently made
+      // `gms status --by city` report on google-maps while plain `gms status`
+      // totalled everything — the same command, two different populations, no
+      // sign of the switch. Say so instead.
+      const groupedAutomation = options.automationId ?? DEFAULT_AUTOMATION;
+      if (options.automationId === undefined && options.json !== true) {
+        console.log(style.grey(`Grouped view is for ${groupedAutomation}; pass -a to change it.`));
+      }
       const groups = new ProgressRepository(driver).groups({
-        automationId: options.automationId ?? 'google-maps',
+        automationId: groupedAutomation,
         idPath: grouping.idPath,
         labelPath: grouping.labelPath,
         ...('sublabelPath' in grouping && { sublabelPath: grouping.sublabelPath }),
@@ -94,7 +105,12 @@ export function runStatus(options: StatusOptions): void {
       });
 
       if (options.json === true) {
-        console.log(JSON.stringify({ by: options.by, groups }, null, 2));
+        // automationId, not options.automationId: the grouped view has a
+        // default, and a consumer parsing this has no other way to learn which
+        // automation the numbers belong to.
+        console.log(
+          JSON.stringify({ by: options.by, automationId: groupedAutomation, groups }, null, 2),
+        );
         return;
       }
       renderGroups(groups, options.by);
@@ -108,12 +124,24 @@ export function runStatus(options: StatusOptions): void {
     // Throughput from jobs finished in the last hour — the only honest basis
     // for an ETA, since early jobs run at a different rate than a warm run.
     const hourAgo = Date.now() - 3_600_000;
+    // Filtered by automation like the counts above. Without this, `gms status -a x`
+    // put x's remaining work over the whole database's rate and produced an ETA
+    // that belonged to neither.
     const recent =
-      driver
-        .prepare<{ n: number }>(
-          `SELECT COUNT(*) AS n FROM jobs WHERE finished_at IS NOT NULL AND finished_at > ?`,
-        )
-        .get([hourAgo])?.n ?? 0;
+      (options.automationId === undefined
+        ? driver
+            .prepare<{ n: number }>(
+              `SELECT COUNT(*) AS n FROM jobs WHERE finished_at IS NOT NULL AND finished_at > :since`,
+            )
+            .get({ since: hourAgo })
+        : driver
+            .prepare<{ n: number }>(
+              `SELECT COUNT(*) AS n FROM jobs
+                WHERE finished_at IS NOT NULL AND finished_at > :since
+                  AND automation_id = :automationId`,
+            )
+            .get({ since: hourAgo, automationId: options.automationId })
+      )?.n ?? 0;
 
     const remaining = counts.pending + counts.leased;
     const etaMs = recent > 0 ? (remaining / recent) * 3_600_000 : null;

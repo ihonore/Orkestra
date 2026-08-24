@@ -281,9 +281,14 @@ export async function runJobs(options: RunnerOptions): Promise<RunSummary> {
             break;
 
           case 'aborted':
-            // Leave the lease to expire: the reaper returns it to pending and
-            // the checkpoint means it resumes rather than restarts.
-            jobLog.info('job aborted by shutdown');
+            // Give the lease back at once rather than letting it expire. The
+            // reaper only sees leases that have already run out, and the claim
+            // only sees 'pending' rows, so an expiring lease is invisible for
+            // the whole of jobLeaseSeconds — stop a run and restart it and the
+            // queue looks empty while every interrupted job sits idle. The
+            // checkpoint stays, so it resumes rather than restarts.
+            await retryOnBusy(() => jobs.release(lease)).catch(() => undefined);
+            jobLog.info('job aborted by shutdown — returned to the queue');
             break;
         }
       } catch (error) {

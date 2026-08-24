@@ -5,10 +5,10 @@
  * provider, worker loop, checkpointing and graceful shutdown.
  */
 import type { ResolvedConfig } from '../../config/schema.js';
-import { BrowserPool } from '../../core/browser/pool.js';
+import { BrowserPool, ownerMarker } from '../../core/browser/pool.js';
 import { ArtifactWriter } from '../../core/browser/artifacts.js';
 import { runJobs, type JobHandler, type PersistableRecord } from '../../core/engine/runner.js';
-import { ShutdownController } from '../../core/engine/shutdown.js';
+import { ShutdownController, sweepOrphanedBrowsers } from '../../core/engine/shutdown.js';
 import type { GoogleMapsJobParams } from '../../core/engine/planner.js';
 import { createLogger } from '../../core/logging/logger.js';
 import { createProxyProvider } from '../../core/proxy/factory.js';
@@ -24,8 +24,23 @@ import { buildQuery } from '../../automations/google-maps/search.js';
 import type { MergeResult } from '../../automations/google-maps/extract/merge.js';
 import { openDatabaseFromConfig } from '../../db/client.js';
 import { BusinessesRepository } from '../../db/repositories/businesses.js';
+import { MetaRepository } from '../../db/repositories/meta.js';
 import { formatDuration, heading, keyValue, style, symbol } from '../output.js';
 import path from 'node:path';
+
+/**
+ * A promise that resolves after `ms`, without holding the event loop open.
+ *
+ * `unref` matters: this races a drain that usually wins, and a referenced timer
+ * would keep the process alive until the full budget elapsed even after
+ * everything else had finished.
+ */
+function deadline(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(resolve, ms);
+    timer.unref?.();
+  });
+}
 
 export interface RunCommandOptions {
   readonly config: ResolvedConfig;
@@ -110,8 +125,26 @@ export async function runRun(options: RunCommandOptions): Promise<void> {
   }).child({ runId, automationId });
 
   const driver = openDatabaseFromConfig(config);
+
+  // Stable per database, so it identifies browsers this project launched and
+  // nobody else's — including a second project on the same machine.
+  const installId = new MetaRepository(driver).ensureInstallId();
+
+  // A previous run killed with SIGKILL (or a closed terminal window) leaves
+  // Chromium behind: Playwright's own cleanup never gets to run. Only genuine
+  // orphans are killed, so a second `gms run` working the same queue is safe.
+  const orphans = await sweepOrphanedBrowsers(ownerMarker(installId), { logger });
+  if (orphans.length > 0 && options.json !== true) {
+    // Never on the --json path: a line before the summary makes the output
+    // unparseable, and the log record carries the same information.
+    console.log(
+      style.grey(`Cleaned up ${orphans.length} browser process(es) left by an earlier run.`),
+    );
+  }
+
   const proxies = createProxyProvider(config);
   const pool = new BrowserPool({
+    ownerTag: installId,
     headless: options.headful === true ? false : config.browser.headless,
     ...(config.browser.channel !== undefined && { channel: config.browser.channel }),
     ...(config.browser.executablePath !== undefined && {
@@ -129,8 +162,34 @@ export async function runRun(options: RunCommandOptions): Promise<void> {
     graceSeconds: config.runtime.shutdownGraceSeconds,
     logger,
   });
+
+  // Most of the grace goes to the jobs; the rest is reserved for closing the
+  // browser, which has to happen inside the same window to be worth anything.
+  const graceMs = config.runtime.shutdownGraceSeconds * 1000;
+  const drainBudgetMs = Math.max(1_000, Math.floor(graceMs * 0.75));
   shutdown.install();
-  shutdown.onShutdown('browser', () => pool.close());
+
+  // Resolves when the worker loop has actually stopped. Assigned below, once
+  // runJobs is running.
+  let drained: Promise<unknown> = Promise.resolve();
+
+  shutdown.onShutdown('browser', async () => {
+    // Wait for in-flight jobs before taking the browser away. Closing the pool
+    // the moment Ctrl-C arrives kills the page a job is mid-scroll on, so the
+    // job dies with a navigation error instead of committing the listings it
+    // already has and checkpointing where it got to — which is precisely the
+    // work the grace period exists to save.
+    //
+    // The wait is bounded here, not by the controller. Losing the controller's
+    // race only logs; it cancels nothing. And closing the pool is the only
+    // thing that unwedges a job stuck in a Playwright call — `page.evaluate`
+    // has no timeout of its own and returns only when the browser goes away —
+    // so waiting for the drain without a deadline of our own would hang the
+    // process with Chromium still running.
+    await Promise.race([drained, deadline(drainBudgetMs)]);
+    await pool.close();
+  });
+
   // The database is deliberately NOT closed here. Shutdown tasks run while
   // workers are still draining, and closing the connection out from under them
   // makes the final jobs fail with "database connection is not open" — losing
@@ -217,7 +276,7 @@ export async function runRun(options: RunCommandOptions): Promise<void> {
   };
 
   try {
-    const summary = await runJobs({
+    const running = runJobs({
       driver,
       automationId,
       logger,
@@ -238,6 +297,11 @@ export async function runRun(options: RunCommandOptions): Promise<void> {
         : null,
       runId,
     });
+    // A rejection is handled by the await below; the shutdown task only needs
+    // to know when the loop stopped, not whether it succeeded.
+    drained = running.catch(() => undefined);
+
+    const summary = await running;
 
     const fill = new BusinessesRepository(driver).fillStats();
 
@@ -289,5 +353,6 @@ export async function runRun(options: RunCommandOptions): Promise<void> {
     shutdown.uninstall();
     await pool.close();
     if (driver.open) driver.close();
+    shutdown.exitWhenIdle();
   }
 }

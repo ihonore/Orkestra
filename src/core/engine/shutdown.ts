@@ -146,20 +146,56 @@ export class ShutdownController {
   get completed(): boolean {
     return this.#completed;
   }
+
+  /** Whether a stop was ever requested. False for a run that ended on its own. */
+  get triggered(): boolean {
+    return this.#shuttingDown;
+  }
+
+  /**
+   * Exit the process, once, with the conventional code for a signal.
+   *
+   * Nothing here calls `process.exit` on the happy path — the process should end
+   * because its event loop is empty, which is the only way to be sure every
+   * write has flushed. But a single leaked handle (an HTTP agent, a log stream,
+   * a listener) then keeps a *stopped* run alive indefinitely, which used to be
+   * hidden by Playwright's own SIGINT handler calling process.exit(130) out from
+   * under us. So: ask for the clean exit, and force one shortly after if the
+   * loop has not drained.
+   *
+   * The timer is unref'd, so it cannot itself be the thing keeping the process
+   * up — if everything else has finished, the process is already gone before it
+   * fires.
+   */
+  exitWhenIdle(graceMs = 2_000): void {
+    if (!this.#shuttingDown) return;
+    process.exitCode = 130;
+    const bail = setTimeout(() => {
+      (this.options.exit ?? process.exit.bind(process))(130);
+    }, graceMs);
+    bail.unref?.();
+  }
 }
 
 /**
  * Kill Chromium processes left behind by a previous crashed run.
  *
- * Matches only processes whose command line contains `userDataDirPrefix`, which
- * is unique to this application. A blanket `chrome.exe` kill would close the
- * user's own browser, and on a shared VPS someone else's too — never do that.
+ * Two conditions, and both are required:
+ *
+ *  1. The command line carries `marker`, which this application puts there and
+ *     nothing else does. A blanket `chrome.exe` kill would close the user's own
+ *     browser, and on a shared VPS someone else's too — never do that. Matching
+ *     on Playwright's temp profile path is nearly as bad, since every Playwright
+ *     project on the machine shares that shape.
+ *  2. The process is genuinely orphaned — its parent is gone. Without this a
+ *     second `gms run`, which the job leasing makes perfectly safe, would kill
+ *     the browsers of the first one on startup.
  *
  * Returns the pids it killed. Best-effort by design: failures are reported, not
  * thrown, because this runs at startup and must not prevent a run from starting.
  */
 export async function sweepOrphanedBrowsers(
-  userDataDirPrefix: string,
+  marker: string,
   options: { logger?: Logger; dryRun?: boolean } = {},
 ): Promise<number[]> {
   const { execFile } = await import('node:child_process');
@@ -169,25 +205,39 @@ export async function sweepOrphanedBrowsers(
   const pids: number[] = [];
   try {
     if (process.platform === 'win32') {
-      // WMIC is deprecated but still the least-bad way to read command lines
-      // without a native dependency; PowerShell's CIM is the fallback.
+      // PowerShell's CIM rather than the deprecated WMIC. ParentProcessId comes
+      // back too, so the orphan test is the same as on POSIX: a parent that is
+      // no longer running.
+      // No Name filter. The default headless launch is chrome-headless-shell.exe,
+      // not chrome.exe, so filtering on the latter matched nothing at all — and
+      // `channel: 'chrome'` or a custom executablePath change the name again.
+      // The marker is what identifies our processes; the name adds nothing but
+      // a way to miss them.
       const { stdout } = await run('powershell.exe', [
         '-NoProfile',
         '-Command',
-        `Get-CimInstance Win32_Process -Filter "Name='chrome.exe'" | ` +
-          `Where-Object { $_.CommandLine -like '*${userDataDirPrefix}*' } | ` +
-          `Select-Object -ExpandProperty ProcessId`,
+        `Get-CimInstance Win32_Process | ` +
+          `Where-Object { $_.CommandLine -like '*${marker}*' } | ` +
+          `ForEach-Object { "$($_.ProcessId) $($_.ParentProcessId)" }`,
       ]);
       for (const line of stdout.split(/\r?\n/)) {
-        const pid = Number(line.trim());
-        if (Number.isInteger(pid) && pid > 0) pids.push(pid);
+        const [pid, parent] = line.trim().split(/\s+/).map(Number);
+        if (!Number.isInteger(pid) || pid === undefined || pid <= 0) continue;
+        if (pid === process.pid) continue;
+        if (parent !== undefined && isAlive(parent)) continue;
+        pids.push(pid);
       }
     } else {
-      const { stdout } = await run('ps', ['-Ao', 'pid=,command=']);
+      const { stdout } = await run('ps', ['-Ao', 'pid=,ppid=,command=']);
       for (const line of stdout.split('\n')) {
-        if (!line.includes(userDataDirPrefix)) continue;
-        const pid = Number(line.trim().split(/\s+/)[0]);
-        if (Number.isInteger(pid) && pid > 0 && pid !== process.pid) pids.push(pid);
+        if (!line.includes(marker)) continue;
+        const [pid, parent] = line.trim().split(/\s+/, 2).map(Number);
+        if (!Number.isInteger(pid) || pid === undefined || pid <= 0) continue;
+        if (pid === process.pid) continue;
+        // Re-parented to init means the launcher is gone. A browser whose
+        // parent is still alive belongs to a run that is still working.
+        if (parent !== 1) continue;
+        pids.push(pid);
       }
     }
   } catch (error) {
@@ -211,4 +261,14 @@ export async function sweepOrphanedBrowsers(
     options.logger?.warn({ pids: killed }, 'killed orphaned browser processes from a previous run');
   }
   return killed;
+}
+
+/** Whether a pid is currently running. Signal 0 tests without delivering. */
+function isAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
 }

@@ -52,12 +52,28 @@ export interface CrawledEmail {
   readonly confidence: number;
 }
 
+/**
+ * An address a rule threw away, kept so the rule stays reviewable.
+ *
+ * Rejects are not linked to businesses and never reach an export. They exist so
+ * `gms enrich emails` can show *what* it discarded and why: a validation rule
+ * that is too aggressive is invisible otherwise, and one already cost this
+ * project a real law firm's address (`BG@rushtonstakely.com`, read as an image
+ * filename). Discarding silently makes that mistake permanent and unnoticed.
+ */
+export interface RejectedEmail {
+  readonly verdict: EmailVerdict;
+  readonly sourceUrl: string;
+}
+
 export type CrawlStatus = 'done' | 'failed' | 'skipped' | 'parked';
 
 export interface CrawlResult {
   readonly domain: string;
   readonly status: CrawlStatus;
   readonly emails: CrawledEmail[];
+  /** Addresses a validation rule rejected. Never linked, never exported. */
+  readonly rejected: RejectedEmail[];
   readonly pagesFetched: number;
   readonly bytesFetched: number;
   readonly httpStatus: number | null;
@@ -89,6 +105,7 @@ export async function crawlDomain(options: CrawlOptions): Promise<CrawlResult> {
 
   const startedAt = Date.now();
   const found = new Map<string, CrawledEmail>();
+  const rejected = new Map<string, RejectedEmail>();
   let pagesFetched = 0;
   let bytesFetched = 0;
   let httpStatus: number | null = null;
@@ -114,6 +131,7 @@ export async function crawlDomain(options: CrawlOptions): Promise<CrawlResult> {
       domain: options.domain,
       status,
       emails: [...found.values()],
+      rejected: [...rejected.values()],
       pagesFetched,
       bytesFetched,
       httpStatus,
@@ -237,7 +255,14 @@ export async function crawlDomain(options: CrawlOptions): Promise<CrawlResult> {
 
     for (const candidate of candidates) {
       const verdict = validateEmail(candidate.raw, options.validation ?? {});
-      if (verdict.isJunk) continue;
+      if (verdict.isJunk) {
+        // Recorded rather than dropped, but bounded by the same ceiling as real
+        // addresses so a staff directory cannot fill the table with noise.
+        if (!rejected.has(verdict.address) && rejected.size < maxEmailsPerDomain) {
+          rejected.set(verdict.address, { verdict, sourceUrl: next.url });
+        }
+        continue;
+      }
       if (found.has(verdict.address)) continue;
 
       // A page offering more addresses than any business has is a directory or
@@ -283,7 +308,10 @@ export async function crawlDomain(options: CrawlOptions): Promise<CrawlResult> {
     }
   }
 
-  if (pagesFetched >= maxPages) stoppedBecause = 'page-budget';
+  // Not when the caller aborted: that reason decides whether the domain is
+  // recorded as crawled or handed back, so it must not be overwritten by a
+  // budget that merely happened to be reached at the same moment.
+  if (pagesFetched >= maxPages && stoppedBecause !== 'aborted') stoppedBecause = 'page-budget';
   return result('done');
 }
 

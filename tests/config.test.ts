@@ -141,6 +141,21 @@ describe('path resolution', () => {
 });
 
 describe('environment layer', () => {
+  it('ignores GMS_DEBUG, which is not a setting', () => {
+    // The CLI prints "Set GMS_DEBUG=1 for a stack trace" when a command fails.
+    // Because every GMS_ name became a config key and the schema is strict,
+    // following that advice made every command die with
+    // `Unrecognized key: "debug"` before it ran.
+    const { values, names } = readEnvLayer({ GMS_DEBUG: '1' });
+    expect(values).toEqual({});
+    expect(names).toEqual([]);
+  });
+
+  it('still maps other GMS_ names alongside it', () => {
+    const { values } = readEnvLayer({ GMS_DEBUG: '1', GMS_LOGGING__LEVEL: 'debug' });
+    expect(values).toEqual({ logging: { level: 'debug' } });
+  });
+
   it('maps SNAKE_CASE segments to camelCase paths', () => {
     const { values } = readEnvLayer({ GMS_DATABASE__BUSY_TIMEOUT_MS: '500' });
     expect(values).toEqual({ database: { busyTimeoutMs: 500 } });

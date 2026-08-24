@@ -10,9 +10,26 @@
  *   GMS_LOGGING__REDACT='["a.b"]'        -> logging.redact = ["a.b"]
  *
  * This layer is where secrets belong. They are never read from the config file.
+ *
+ * `GMS_DEBUG` is reserved: it turns on stack traces in the CLI and is not a
+ * config key. See {@link RESERVED}.
  */
 
 const PREFIX = 'GMS_';
+
+/**
+ * `GMS_*` names that control the tool itself rather than the configuration.
+ *
+ * Without this list the mapping is total: every `GMS_`-prefixed variable
+ * becomes a config key, the schema is strict, and so `GMS_DEBUG=1` — which the
+ * CLI itself tells you to set when a command fails — made every command die
+ * with `Unrecognized key: "debug"` before it ran. Troubleshooting advice that
+ * breaks the tool is worse than no advice.
+ *
+ * Anything added here must be documented, because it is now a name a user can
+ * no longer use for a config key.
+ */
+const RESERVED = new Set(['GMS_DEBUG']);
 
 function snakeToCamel(segment: string): string {
   return segment
@@ -72,7 +89,7 @@ export function readEnvLayer(env: NodeJS.ProcessEnv = process.env): EnvLayer {
   const names: string[] = [];
 
   for (const [name, raw] of Object.entries(env)) {
-    if (raw === undefined || !name.startsWith(PREFIX)) continue;
+    if (raw === undefined || !name.startsWith(PREFIX) || RESERVED.has(name)) continue;
     const body = name.slice(PREFIX.length);
     if (body === '') continue;
 

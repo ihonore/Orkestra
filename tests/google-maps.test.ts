@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { runGoogleMapsJob } from '../src/automations/google-maps/index.js';
 import {
   cidFromFid,
   extractFromUrl,
@@ -513,5 +514,69 @@ describe('selector hygiene', () => {
     }
 
     expect(offenders).toEqual([]);
+  });
+});
+
+describe('aborting a job', () => {
+  /**
+   * A Page that allows only the listener bookkeeping every run does, and throws
+   * on anything else. Navigating, scrolling or reading the DOM after an abort
+   * would each fail this test loudly rather than quietly working.
+   */
+  const unusablePage = new Proxy(
+    { on: () => undefined, off: () => undefined },
+    {
+      get(target, property) {
+        if (property === 'on' || property === 'off') {
+          return (target as Record<string, unknown>)[property as string];
+        }
+        throw new Error(`the page must not be used after an abort (touched: ${String(property)})`);
+      },
+    },
+  ) as never;
+
+  const target = {
+    city: 'Birmingham',
+    stateCode: 'AL',
+    category: 'Plumber',
+    lat: 33.5186,
+    lng: -86.8104,
+  };
+
+  it('reports aborted rather than success when there is nothing left to iterate', async () => {
+    // The per-listing check cannot fire when the list is empty, so the function
+    // used to fall through to `ok` with zero extracted — and the engine marked
+    // the job done, retiring that city and category with no data. Four real
+    // jobs finished this way after a single Ctrl-C.
+    const controller = new AbortController();
+    controller.abort();
+
+    const outcome = await runGoogleMapsJob({
+      page: unusablePage,
+      target,
+      signal: controller.signal,
+      cursor: { phase: 'detail', urls: [], processedIndex: 0, scrollRounds: 0 },
+    });
+
+    expect(outcome.kind).toBe('aborted');
+  });
+
+  it('reports aborted when the harvest produced urls it never visited', async () => {
+    const controller = new AbortController();
+    controller.abort();
+
+    const outcome = await runGoogleMapsJob({
+      page: unusablePage,
+      target,
+      signal: controller.signal,
+      cursor: {
+        phase: 'detail',
+        urls: ['https://www.google.com/maps/place/One', 'https://www.google.com/maps/place/Two'],
+        processedIndex: 0,
+        scrollRounds: 1,
+      },
+    });
+
+    expect(outcome).toEqual({ kind: 'aborted', extracted: 0 });
   });
 });

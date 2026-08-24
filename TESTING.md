@@ -687,6 +687,85 @@ sqlite3 data/gms.sqlite "SELECT last_id FROM export_cursors WHERE exporter='shee
 
 ---
 
+## Regression checks
+
+Ten defects found while writing [docs/COMMANDS.md](docs/COMMANDS.md). Each one
+had passed unnoticed because nothing exercised it. These are the manual checks;
+the automated ones live in the test suite.
+
+```bash
+# 1. The tool's own troubleshooting advice must not break the tool.
+GMS_DEBUG=1 gms db status
+# Should print the status. It used to die with: Unrecognized key: "debug"
+
+# 2. Interrupting enrichment must not strand the site being crawled.
+gms enrich emails &          # let it claim a few, then:
+kill -9 %1
+sqlite3 data/gms.sqlite "SELECT COUNT(*) FROM domains WHERE status='crawling';"
+# Non-zero here is expected — the process died. Then:
+gms enrich emails            # logs "returned stalled domains to the queue"
+# Note the lease is 5 minutes by default, so wait it out or lower
+# enrichment.websiteEmails.maxTimePerDomainMs to test quickly.
+
+# 3 + 4. View-only must mean read-only, and the error must name a real flag.
+gms ui --no-open &
+curl -s -X POST http://127.0.0.1:4600/api/jobs/retry
+# {"error":"controls are disabled — restart with --control"}   (was: retried N)
+
+# 5. --control has no short form, because -c is --config everywhere.
+gms ui --help | grep control
+#   --control    let the page start scrapes, imports and exports…
+
+# 6. The csv settings in gms.config.yaml must actually apply.
+printf 'exporters:\n  csv:\n    bom: false\n' >> gms.config.yaml
+gms export csv --full && head -c 3 data/exports/leads-flat.csv | xxd
+# No ef bb bf. And `--no-bom` / `--excel-safe` still override the file.
+
+# 7. Rejected addresses must be visible, not silently discarded.
+gms enrich emails
+# The summary shows "addresses rejected" and a "Rejected" breakdown by reason.
+sqlite3 data/gms.sqlite "SELECT junk_reason, COUNT(*) FROM emails
+                          WHERE is_junk=1 GROUP BY 1 ORDER BY 2 DESC;"
+# Check nothing here should have been kept. They are never linked or exported:
+sqlite3 data/gms.sqlite "SELECT COUNT(*) FROM business_emails be
+                           JOIN emails e ON e.id=be.email_id WHERE e.is_junk=1;"
+# Must be 0.
+
+# 8. Ctrl-C must stop a run cleanly, and the run must actually exit.
+gms run --max-jobs 20
+# Ctrl-C once jobs are leased. Expect, in order:
+#   "shutting down — finishing in-flight work"
+#   "job aborted by shutdown — returned to the queue"  (one per in-flight job)
+#   "shutdown complete", then the run summary with  stopped  aborted
+# Measured on this machine: 13s from Ctrl-C to exit, 0 browsers left.
+sqlite3 data/gms.sqlite "SELECT COUNT(*) FROM jobs WHERE status='leased';"
+# Must be 0 — an interrupted job goes back to pending, keeping its checkpoint.
+sqlite3 data/gms.sqlite "SELECT COUNT(*) FROM jobs WHERE status='done' AND result_count=0;"
+# Must be 0 — a job aborted during search must never be recorded as done.
+pgrep -f gms-owner | wc -l    # must be 0
+
+# 8b. A hard kill must still be recoverable (the reaper, not the graceful path).
+gms run & sleep 25; kill -9 %1
+sqlite3 data/gms.sqlite "SELECT COUNT(*) FROM jobs WHERE status='leased';"   # non-zero
+# Wait out runtime.jobLeaseSeconds (300s), then start any run:
+gms run --max-jobs 1
+sqlite3 data/gms.sqlite "SELECT id, status, last_error_kind FROM jobs
+                          WHERE last_error_kind='lease_expired';"
+# The abandoned jobs are pending again, with their checkpoints intact.
+
+# 9. A hard kill must not leak Chromium forever.
+gms run & sleep 20; kill -9 %1
+pgrep -f gms-owner | wc -l     # non-zero: orphans
+gms run --max-jobs 1
+# Prints "Cleaned up N browser process(es) left by an earlier run."
+# A second concurrent `gms run` must NOT be affected — only orphans are killed.
+
+# 10. status must not quietly change what it is counting.
+gms status --by state
+# Prints "Grouped view is for google-maps; pass -a to change it."
+gms status -a google-maps      # throughput and ETA now filtered too
+```
+
 ## M6+ — Hardening & Scale
 
 ### 24-hour soak test

@@ -57,10 +57,8 @@ Three things about config discovery that cost real time when you don't know them
 - **`-c` disables the local overlay.** With auto-discovery, `gms.config.local.yaml`
   is layered on top of `gms.config.yaml`. Naming a file explicitly loads that one
   file only, so the same machine can give two different answers.
-- **On `gms ui`, `-c` is not `--control`.** The help text says `-c, --control`,
-  but the global `-c, --config` wins: `gms ui -c` fails with *"option '-c,
-  --config <path>' argument missing"*, and `gms ui -c mine.yaml` starts a
-  **view-only** dashboard. Always type `--control` in full.
+- **`gms ui --control` has no short form.** `-c` belongs to `--config` here as
+  everywhere else, so it cannot also mean `--control`.
 
 Almost every command takes `--json` for machine-readable output. The exceptions
 are `gms import sheets`, `gms jobs retry`, `gms db check`, `gms db vacuum` and
@@ -265,9 +263,20 @@ search, saves what it finds.
   silently truncated.
 - **It exits 0 even if every job failed.** Judge by "jobs failed" in the summary
   or `gms jobs list --status failed`, never by the exit code.
-- Ctrl-C stops taking new work and closes the browsers; a second Ctrl-C exits
-  immediately with code 130. See *Known rough edges* for what in-flight jobs
-  actually get.
+- Ctrl-C stops taking new work and lets in-flight jobs finish and checkpoint —
+  bounded by `runtime.shutdownGraceSeconds` (30s) — before the browsers close.
+  A job that cannot finish in time is returned to the queue with its checkpoint,
+  so it resumes rather than restarts, and the run exits within a few seconds of
+  the deadline. Measured: 13s from Ctrl-C to exit, four in-flight jobs returned,
+  no browsers left behind.
+- A second Ctrl-C exits immediately with code 130 and abandons what was running;
+  the reaper recovers those leases once they expire (`runtime.jobLeaseSeconds`,
+  300s), keeping their checkpoints.
+- At startup it kills Chromium processes orphaned by a previous run. Only
+  genuine orphans, and only ones this project launched, so a second `gms run`
+  working the same queue is unaffected. This mostly matters on Windows: on macOS
+  and Linux Playwright's own pipe-based cleanup already takes the browser down
+  with a `kill -9`ed launcher, but `taskkill /F` on Windows does not.
 
 ```bash
 gms run                          # work the whole queue
@@ -308,7 +317,12 @@ Visits the websites `gms run` collected and looks for contact addresses.
   starts 1000.
 - A page offering more than 5 usable addresses keeps only the first 5 and is
   flagged directory-like, so a genuine 8-person team page loses 3.
-- **Ctrl-C strands work here.** See *Known rough edges*.
+- Ctrl-C hands the site being crawled back to the queue. A process killed
+  outright leaves it claimed, and the next `gms enrich emails` reclaims anything
+  held longer than five times the per-domain time budget.
+- Addresses the rules reject are stored, unlinked and never exported, and
+  summarised under "Rejected" — so a rule that is too aggressive is visible
+  rather than silent.
 
 ---
 
@@ -335,8 +349,8 @@ How far the run has got, and roughly how long the rest will take.
   always print.
 - With no jobs at all it stops and points you at `gms plan`.
 - `--incomplete` and `-n` are silently ignored unless `--by` is present.
-- `--by` quietly restricts to `google-maps`, while plain `gms status` totals
-  every automation.
+- `--by` needs one automation and falls back to `google-maps`, while plain
+  `gms status` totals every automation. It says so when it does.
 
 ### `gms jobs list`
 
@@ -404,7 +418,9 @@ A local web page showing progress, leads, failures and exports — and, with
 - Typed values are clamped, not rejected: browser workers 1–32, email workers
   1–64, max jobs 1–100,000. Asking for 500 workers silently gives 32.
 - One task of each kind at a time; a second Scrape returns HTTP 409.
-- **Type `--control` in full** — `-c` is the global `--config`.
+- `--control` has no short form: `-c` is the global `--config`.
+- Without `--control` the dashboard is genuinely read-only. Every button that
+  writes, including "Retry all failed", is refused.
 - Settings you save don't appear until you restart `gms ui`, because the server
   read its configuration once at startup. Tasks started afterwards do use the new
   values.
@@ -442,8 +458,8 @@ from a stored position, so running them repeatedly only sends what is new.
   is the only in-file form Excel reads correctly — at the cost of a file only
   Excel reads correctly. The alternative is File → Import with the column set to
   Text.
-- `exporters.csv.excelSafeText` and `exporters.csv.bom` appear in the config
-  template but are **not read** — only the flags work. See *Known rough edges*.
+- `exporters.csv.excelSafeText` and `exporters.csv.bom` set the defaults;
+  `--excel-safe` and `--no-bom` override them for one run.
 
 ### `gms export sheets`
 
@@ -498,39 +514,73 @@ Use `gms db backup`, never `cp`: copying an open SQLite database picks up the
 
 ---
 
-## Known rough edges
+## Fixed here
 
-Behaviour that is currently wrong or misleading, found while writing this file.
-Listed so the documentation stays honest; none of them corrupt data you have
-already collected.
+Writing this reference turned up ten defects; reviewing the fixes for them
+turned up twelve more, several of them regressions in the fixes themselves.
+All are fixed, and everything described above is the fixed behaviour — listed
+so that anyone comparing against an older build knows what changed.
 
-1. **`GMS_DEBUG=1` breaks every command.** The CLI prints "Set `GMS_DEBUG=1` for
-   a stack trace" on failure, but `GMS_` is the config environment prefix and the
-   schema is strict, so setting it fails with `Unrecognized key: "debug"` before
-   any command runs.
-2. **`gms enrich emails` strands work on Ctrl-C.** A site is marked `crawling`
-   when claimed and nothing ever resets it — there is no lease or reaper as there
-   is for the scrape queue — so anything in flight is never retried.
-3. **The dashboard's "Retry all failed" works without `--control`.** It is a
-   database write reachable in view-only mode.
-4. **The dashboard names a flag that does not exist**, telling you to "restart
-   with `--allow-control`". The flag is `--control`.
-5. **`-c` on `gms ui` cannot mean `--control`** — the global `--config` shadows it.
-6. **`exporters.csv.excelSafeText` and `exporters.csv.bom` do nothing.** Both are
-   in the config schema and the starter template; the exporter reads only the
-   flags.
-7. **The "Rejected" email report is always empty.** Junk addresses are discarded
-   before they are stored, so the report — which reads `is_junk = 1` — has
-   nothing to show, and a too-aggressive rule cannot be audited.
-8. **Ctrl-C during `gms run` does not give in-flight jobs time to finish.**
-   `runtime.shutdownGraceSeconds` bounds how long *cleanup* may take; the browser
-   pool closes immediately, so in-flight jobs are aborted rather than allowed to
-   checkpoint. The config comment says otherwise.
-9. **Orphaned Chromium processes are never swept.** The sweeper exists but no
-   command calls it, so after a `kill -9` you must clean up by hand.
-10. **`gms status --by` silently switches automation** to `google-maps`, and the
-    throughput and ETA ignore `-a` entirely — so `gms status -a other` shows one
-    automation's counts beside the whole database's throughput.
+**Stopping a run** was the worst of it, and nothing about it worked:
+
+1. Playwright installed its own signal handlers. Its SIGINT handler closed every
+   browser and called `process.exit(130)` outright, so the graceful stop never
+   got past starting — no checkpoint, no summary, no database close. Its SIGTERM
+   and SIGHUP handlers were quieter and worse: they closed the browser under jobs
+   that were still running. The tool now owns those signals.
+2. Ctrl-C closed the browser immediately, so in-flight jobs died mid-page instead
+   of committing what they had. They now drain first.
+3. That drain then had no deadline of its own. Losing the shutdown controller's
+   race only logs — it cancels nothing — and closing the browser is the only
+   thing that unwedges a job stuck in a Playwright call, so a wedged job would
+   have hung the process forever with Chromium alive.
+4. An abort during search or feed harvest returned *success* with zero results,
+   because the only abort check sat inside the per-listing loop and an empty list
+   never enters it. Four real jobs were marked done with `result_count` 0 after
+   one Ctrl-C. Those four cities and categories would never have been scraped
+   again.
+5. Interrupted jobs were left leased for the full 300-second lease, so stopping a
+   run and restarting it found an apparently empty queue. They are now returned
+   to the queue at once, fenced, with their checkpoints.
+6. Nothing exited afterwards. Playwright's `process.exit(130)` had been hiding a
+   leaked handle; with that gone, a stopped run stayed alive indefinitely.
+
+**Enrichment** had the same shape of problem:
+
+7. Ctrl-C stranded the site being crawled as `crawling` forever — the claim only
+   ever looks at `pending`, and there was no reaper.
+8. The crawler never throws, so an interrupted crawl was committed as a
+   *successful* one: status `done`, zero emails, and a 90-day recrawl cooldown.
+9. Adding a reaper reintroduced the hazard the job queue guards against — the
+   worker it declares dead may be alive. The domain queue now carries a fencing
+   token, like `jobs.lease_epoch`.
+10. The lease was sized off `maxTimePerDomainMs`, which does not bound how long a
+    claim is held: a site asking for `Crawl-delay: 30` holds one far longer.
+
+**Everything else:**
+
+11. `GMS_DEBUG=1`, which the CLI itself tells you to set when a command fails,
+    broke every command — `GMS_` is the config environment prefix and the schema
+    is strict, so it died with `Unrecognized key: "debug"`.
+12. The dashboard's "Retry all failed" wrote to the database without `--control`,
+    and the button stayed enabled in view-only.
+13. The dashboard told you to "restart with `--allow-control`". No such flag.
+14. `-c` on `gms ui` was advertised as `--control` and could never mean it.
+15. `exporters.csv.excelSafeText` and `exporters.csv.bom` shipped in the starter
+    config and were read by nothing.
+16. Rejected addresses were discarded before they were stored, so the "Rejected"
+    report — which counts them — was always empty and no validation rule could be
+    audited.
+17. Storing them then exposed a second bug: the upsert never refreshed
+    `is_role`/`is_free`, so an address first seen as a reject and later accepted
+    kept the placeholder flags — exactly what re-running with better rules does.
+18. Orphaned Chromium was never swept: the sweeper existed but nothing called it,
+    it had no safe way to tell our browsers from anyone else's, and its Windows
+    branch filtered on `chrome.exe` when the default launch is
+    `chrome-headless-shell.exe`. Chiefly a Windows fix — Playwright's own cleanup
+    already handles `kill -9` on macOS and Linux.
+19. `gms status --by` switched automation without saying so, the throughput and
+    ETA ignored `-a` entirely, and the grouped `--json` gave no sign of either.
 
 ---
 

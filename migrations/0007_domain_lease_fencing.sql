@@ -1,0 +1,17 @@
+-- A fencing token for the domain crawl queue.
+--
+-- The queue gained a reaper so that a site claimed by a process that died is
+-- returned to 'pending' rather than being stuck forever. That introduces the
+-- hazard the job queue already guards against: once a stalled claim is
+-- reclaimed and a second worker picks the site up, the *original* worker may
+-- still be alive — an event loop blocked past the lease, a slow crawl — and its
+-- eventual write would land on a claim it no longer owns.
+--
+-- Guarding on `status = 'crawling'` is not enough, because the new owner has
+-- put the row back into exactly that state. Every write therefore carries the
+-- epoch it claimed under, and both the claim and the reaper increment it, so a
+-- fenced-out worker's writes change nothing and its results are discarded.
+--
+-- This is the same design as jobs.lease_epoch, and for the same reason: without
+-- it the recovery mechanism itself reintroduces duplicate writes.
+ALTER TABLE domains ADD COLUMN crawl_epoch INTEGER NOT NULL DEFAULT 0;

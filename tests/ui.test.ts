@@ -249,6 +249,38 @@ describe('task controls', () => {
     expect(listed.enabled).toBe(false);
   });
 
+  it('refuses "retry all failed" without --control, because it writes', async () => {
+    // View-only has to mean read-only. Retrying rewrites job rows and deletes
+    // their resume points, so it belongs behind the same gate as every other
+    // action — it was reachable without one.
+    const { url } = await serve();
+    const response = await fetch(`${url}/api/jobs/retry`, { method: 'POST' });
+    expect(response.status).toBe(403);
+  });
+
+  it('allows "retry all failed" once controls are enabled', async () => {
+    const { url } = await serve({ allowControl: true });
+    const response = await fetch(`${url}/api/jobs/retry`, { method: 'POST' });
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ retried: 0 });
+  });
+
+  it('names a flag that exists when it refuses', async () => {
+    // The dashboard used to say "restart with --allow-control". No such flag.
+    const { url } = await serve();
+    const body = (await (
+      await fetch(`${url}/api/tasks/start`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ command: 'run' }),
+      })
+    ).json()) as { error: string };
+
+    expect(body.error).toContain('--control');
+    expect(body.error).not.toContain('--allow-control');
+    expect(PAGE).not.toContain('--allow-control');
+  });
+
   it('refuses a command that is not on the allow-list', async () => {
     // The page names a command; it never supplies a command line. Anything
     // outside the list must be rejected rather than executed.

@@ -11,7 +11,11 @@ import { ShutdownController } from '../../core/engine/shutdown.js';
 import { createLogger } from '../../core/logging/logger.js';
 import { createProxyProvider } from '../../core/proxy/factory.js';
 import { ulid } from '../../core/util/ids.js';
-import { crawlDomain, startUrlFor } from '../../enrichment/website-emails/crawler.js';
+import {
+  crawlDomain,
+  type CrawlResult,
+  startUrlFor,
+} from '../../enrichment/website-emails/crawler.js';
 import { openDatabaseFromConfig } from '../../db/client.js';
 import { EmailsRepository } from '../../db/repositories/emails.js';
 import { formatBytes, formatDuration, heading, keyValue, style, symbol } from '../output.js';
@@ -50,8 +54,26 @@ export async function runEnrichEmails(options: EnrichCommandOptions): Promise<vo
 
   const startedAt = Date.now();
   const maxDomains = options.maxDomains ?? Number.POSITIVE_INFINITY;
+
+  // Domains left claimed by a process that died mid-crawl.
+  //
+  // maxTimePerDomainMs is not an upper bound on how long a claim is held: it is
+  // checked between pages, so a site asking for `Crawl-delay: 30` can hold one
+  // well past it — eight pages of that is four minutes of waiting alone. The
+  // lease is deliberately far larger than the budget, because reclaiming a
+  // domain a live worker is still crawling costs a duplicate crawl, while
+  // waiting too long only delays a retry.
+  const domainLeaseMs = Math.max(
+    1_800_000,
+    config.enrichment.websiteEmails.maxTimePerDomainMs * 10,
+  );
+  const reclaimed = emails.reclaimStalledDomains(domainLeaseMs);
+  if (reclaimed > 0) {
+    logger.info({ reclaimed }, 'returned stalled domains to the queue');
+  }
   let crawled = 0;
   let emailsLinked = 0;
+  let emailsRejected = 0;
   let bytesTotal = 0;
 
   async function worker(index: number): Promise<void> {
@@ -65,7 +87,7 @@ export async function runEnrichEmails(options: EnrichCommandOptions): Promise<vo
       // A suppressed domain is claimed and immediately retired, so it leaves the
       // queue rather than being re-claimed forever.
       if (emails.isSuppressed('domain', domain.domain)) {
-        emails.finishDomain(domain.id, {
+        emails.finishDomain(domain.id, domain.crawl_epoch, {
           status: 'skipped',
           httpStatus: null,
           finalUrl: null,
@@ -80,90 +102,132 @@ export async function runEnrichEmails(options: EnrichCommandOptions): Promise<vo
         continue;
       }
 
-      const session = proxies.acquire('http');
-      const result = await crawlDomain({
-        domain: domain.domain,
-        startUrl: startUrlFor(domain.domain, domain.known_url),
-        maxDepth: config.enrichment.websiteEmails.maxDepth,
-        maxPages: config.enrichment.websiteEmails.maxPages,
-        maxTimeMs: config.enrichment.websiteEmails.maxTimePerDomainMs,
-        maxBytes: config.enrichment.websiteEmails.maxBytesPerDomain,
-        maxEmailsPerPage: config.enrichment.websiteEmails.maxEmailsPerPage,
-        maxEmailsPerDomain: config.enrichment.websiteEmails.maxEmailsPerDomain,
-        respectRobots: config.http.respectRobots,
-        perRequestDelayMs: config.http.perHostDelayMs,
-        validation: {
-          excludeGovernment: config.enrichment.websiteEmails.validation.excludeGovernment,
-          excludeEducation: config.enrichment.websiteEmails.validation.excludeEducation,
-          blockedDomains: config.enrichment.websiteEmails.validation.blockedDomains,
-        },
-        ...(session !== null && session.settings.server !== '' && { proxy: session.settings }),
-        signal: shutdown.signal,
-        logger: log,
-      });
-
-      if (session !== null) {
-        proxies.release(session, result.status === 'failed' ? 'error' : 'ok');
-      }
-      bytesTotal += result.bytesFetched;
-
-      // Store everything for this domain in one transaction, so a crash cannot
-      // leave a domain marked done with only half its addresses recorded.
-      driver.transaction(() => {
-        const businesses = emails.businessesForDomain(domain.id);
-
-        for (const found of result.emails) {
-          if (emails.isSuppressed('email', found.verdict.address)) continue;
-
-          const emailId = emails.upsertEmail({
-            address: found.verdict.address,
-            localPart: found.verdict.localPart,
-            domain: found.verdict.domain,
-            isRole: found.verdict.isRole,
-            isFree: found.verdict.isFree,
-            isJunk: false,
-            junkReason: null,
-          });
-
-          for (const business of businesses) {
-            emails.link({
-              businessId: business.id,
-              emailId,
-              sourceUrl: found.sourceUrl,
-              sourceDomainId: domain.id,
-              method: found.method,
-              confidence: found.confidence,
-              pageDepth: found.depth,
-            });
-            emailsLinked += 1;
-          }
-        }
-
-        const recrawlDays = config.enrichment.websiteEmails.recrawlAfterDays;
-        emails.finishDomain(domain.id, {
-          status: result.status,
-          httpStatus: result.httpStatus,
-          finalUrl: result.finalUrl,
-          isParked: result.isParked,
-          isDirectoryLike: result.isDirectoryLike,
-          pagesFetched: result.pagesFetched,
-          bytesFetched: result.bytesFetched,
-          emailsFound: result.emails.length,
-          error: result.error,
-          nextEligibleAt: Date.now() + recrawlDays * 24 * 60 * 60 * 1000,
-        });
-      }, 'immediate');
-
-      log.info(
-        {
+      // From here the domain is claimed, so every exit path has to either
+      // finish it or give it back. A worker that just stops leaves the row
+      // 'crawling', and the claim query only ever looks at 'pending'.
+      let handedBack = false;
+      try {
+        const session = proxies.acquire('http');
+        const result: CrawlResult = await crawlDomain({
           domain: domain.domain,
-          status: result.status,
-          emails: result.emails.length,
-          pages: result.pagesFetched,
-          stopped: result.stoppedBecause,
-        },
-        'domain crawled',
-      );
+          startUrl: startUrlFor(domain.domain, domain.known_url),
+          maxDepth: config.enrichment.websiteEmails.maxDepth,
+          maxPages: config.enrichment.websiteEmails.maxPages,
+          maxTimeMs: config.enrichment.websiteEmails.maxTimePerDomainMs,
+          maxBytes: config.enrichment.websiteEmails.maxBytesPerDomain,
+          maxEmailsPerPage: config.enrichment.websiteEmails.maxEmailsPerPage,
+          maxEmailsPerDomain: config.enrichment.websiteEmails.maxEmailsPerDomain,
+          respectRobots: config.http.respectRobots,
+          perRequestDelayMs: config.http.perHostDelayMs,
+          validation: {
+            excludeGovernment: config.enrichment.websiteEmails.validation.excludeGovernment,
+            excludeEducation: config.enrichment.websiteEmails.validation.excludeEducation,
+            blockedDomains: config.enrichment.websiteEmails.validation.blockedDomains,
+          },
+          ...(session !== null && session.settings.server !== '' && { proxy: session.settings }),
+          signal: shutdown.signal,
+          logger: log,
+        });
+
+        if (session !== null) {
+          proxies.release(session, result.status === 'failed' ? 'error' : 'ok');
+        }
+        bytesTotal += result.bytesFetched;
+
+        const interrupted = result.stoppedBecause === 'aborted';
+
+        // Store everything for this domain in one transaction, so a crash cannot
+        // leave a domain marked done with only half its addresses recorded.
+        driver.transaction(() => {
+          const businesses = emails.businessesForDomain(domain.id);
+
+          for (const found of result.emails) {
+            if (emails.isSuppressed('email', found.verdict.address)) continue;
+
+            const emailId = emails.upsertEmail({
+              address: found.verdict.address,
+              localPart: found.verdict.localPart,
+              domain: found.verdict.domain,
+              isRole: found.verdict.isRole,
+              isFree: found.verdict.isFree,
+              isJunk: false,
+              junkReason: null,
+            });
+
+            for (const business of businesses) {
+              emails.link({
+                businessId: business.id,
+                emailId,
+                sourceUrl: found.sourceUrl,
+                sourceDomainId: domain.id,
+                method: found.method,
+                confidence: found.confidence,
+                pageDepth: found.depth,
+              });
+              emailsLinked += 1;
+            }
+          }
+
+          // Rejects are stored but never linked to a business, so they cannot
+          // reach an export even by accident. They exist purely so the "Rejected"
+          // breakdown can show which rule is throwing what away.
+          for (const found of result.rejected) {
+            emails.upsertEmail({
+              address: found.verdict.address,
+              localPart: found.verdict.localPart,
+              domain: found.verdict.domain,
+              isRole: found.verdict.isRole,
+              isFree: found.verdict.isFree,
+              isJunk: true,
+              junkReason: found.verdict.junkReason,
+            });
+            emailsRejected += 1;
+          }
+
+          // An interrupted crawl is not a finished one. crawlDomain never
+          // throws — on Ctrl-C it breaks its page loop and returns a normal
+          // 'done' result — so without this check the domain would be recorded
+          // as successfully crawled with whatever it happened to have, and put
+          // on the 90-day recrawl cooldown. A site interrupted after one page
+          // would look permanently email-less. The addresses already found are
+          // still committed; only the completion is withheld.
+          if (interrupted) return;
+
+          const recrawlDays = config.enrichment.websiteEmails.recrawlAfterDays;
+          emails.finishDomain(domain.id, domain.crawl_epoch, {
+            status: result.status,
+            httpStatus: result.httpStatus,
+            finalUrl: result.finalUrl,
+            isParked: result.isParked,
+            isDirectoryLike: result.isDirectoryLike,
+            pagesFetched: result.pagesFetched,
+            bytesFetched: result.bytesFetched,
+            emailsFound: result.emails.length,
+            error: result.error,
+            nextEligibleAt: Date.now() + recrawlDays * 24 * 60 * 60 * 1000,
+          });
+        }, 'immediate');
+
+        log.info(
+          {
+            domain: domain.domain,
+            status: result.status,
+            emails: result.emails.length,
+            pages: result.pagesFetched,
+            stopped: result.stoppedBecause,
+          },
+          'domain crawled',
+        );
+        handedBack = !interrupted;
+      } finally {
+        // Reached whether the crawl finished, threw, or stopped early. A domain
+        // that reached finishDomain is already out of 'crawling'; this covers
+        // the two that do not — a throw, and a Ctrl-C partway through.
+        if (!handedBack) {
+          emails.releaseDomain(domain.id, domain.crawl_epoch);
+          log.debug({ domain: domain.domain }, 'returned unfinished domain to the queue');
+        }
+      }
     }
   }
 
@@ -175,7 +239,9 @@ export async function runEnrichEmails(options: EnrichCommandOptions): Promise<vo
     const junk = emails.junkBreakdown();
 
     if (options.json === true) {
-      console.log(JSON.stringify({ runId, crawled, stats, junk }, null, 2));
+      console.log(
+        JSON.stringify({ runId, crawled, emailsLinked, emailsRejected, stats, junk }, null, 2),
+      );
       return;
     }
 
@@ -187,6 +253,7 @@ export async function runEnrichEmails(options: EnrichCommandOptions): Promise<vo
         ['domains crawled', String(crawled)],
         ['bytes fetched', formatBytes(bytesTotal)],
         ['links created', String(emailsLinked)],
+        ['addresses rejected', String(emailsRejected)],
       ]),
     );
 
@@ -225,5 +292,6 @@ export async function runEnrichEmails(options: EnrichCommandOptions): Promise<vo
   } finally {
     shutdown.uninstall();
     if (driver.open) driver.close();
+    shutdown.exitWhenIdle();
   }
 }

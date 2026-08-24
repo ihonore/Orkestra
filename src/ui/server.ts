@@ -430,7 +430,7 @@ export function startUiServer(options: UiServerOptions): Promise<RunningServer> 
 
       if (url.pathname === '/api/tasks/start' && req.method === 'POST') {
         if (tasks === null) {
-          json(res, 403, { error: 'controls are disabled — restart with --allow-control' });
+          json(res, 403, { error: 'controls are disabled — restart with --control' });
           return;
         }
         readBody(req, (body) => {
@@ -514,6 +514,13 @@ export function startUiServer(options: UiServerOptions): Promise<RunningServer> 
       }
 
       if (url.pathname === '/api/jobs/retry' && req.method === 'POST') {
+        // Retrying rewrites job rows and discards their resume points. It is a
+        // write like any other, so it belongs behind the same gate — a
+        // dashboard started without --control must not be able to change data.
+        if (tasks === null) {
+          json(res, 403, { error: 'controls are disabled — restart with --control' });
+          return;
+        }
         const driver = openDatabaseFromConfig(config);
         try {
           const n = new JobsRepository(driver).retry({ automationId: 'google-maps' });

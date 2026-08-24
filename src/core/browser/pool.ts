@@ -37,7 +37,27 @@ export interface BrowserPoolOptions {
   readonly jobsPerContext?: number;
   readonly locale?: string;
   readonly timezoneId?: string;
+  /**
+   * Marks the launched browser as ours, so orphans can be found and killed
+   * after a hard kill without touching anyone else's Chromium.
+   *
+   * See {@link ownerMarker}.
+   */
+  readonly ownerTag?: string;
   readonly logger?: Logger;
+}
+
+/**
+ * The command-line marker identifying a browser this installation launched.
+ *
+ * Chromium ignores switches it does not recognise, but keeps them in its
+ * command line — which is exactly what a process sweep needs. Playwright's own
+ * `--user-data-dir` points at a random temp folder shared by every Playwright
+ * project on the machine, so matching on it would risk killing an unrelated
+ * tool's browser. This is specific to us.
+ */
+export function ownerMarker(ownerTag: string): string {
+  return `--gms-owner=${ownerTag}`;
 }
 
 export interface LeaseContextOptions {
@@ -99,7 +119,24 @@ export class BrowserPool {
 
     const launch: LaunchOptions = {
       headless: this.options.headless ?? true,
-      args: [...LAUNCH_ARGS],
+      args: [
+        ...LAUNCH_ARGS,
+        ...(this.options.ownerTag !== undefined ? [ownerMarker(this.options.ownerTag)] : []),
+      ],
+      // Playwright installs its own signal handlers unless told not to, and
+      // they are not compatible with a graceful stop: its SIGINT handler closes
+      // every browser and then calls process.exit(130) outright, so our own
+      // handler never gets past starting the drain — no checkpoint, no summary,
+      // no database close. SIGTERM and SIGHUP are milder but worse in effect:
+      // they close the browsers underneath jobs that are still running, which
+      // is exactly the "Target page, context or browser has been closed"
+      // failure the graceful path exists to avoid.
+      //
+      // The ShutdownController owns these signals instead. It aborts the
+      // signal, lets in-flight jobs finish, and closes this pool itself.
+      handleSIGINT: false,
+      handleSIGTERM: false,
+      handleSIGHUP: false,
       ...(this.options.channel !== undefined && { channel: this.options.channel }),
       ...(this.options.executablePath !== undefined && {
         executablePath: this.options.executablePath,

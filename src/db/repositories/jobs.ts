@@ -125,6 +125,7 @@ export class JobsRepository extends BaseRepository {
   readonly #heartbeat: PreparedStatement;
   readonly #complete: PreparedStatement;
   readonly #fail: PreparedStatement;
+  readonly #release: PreparedStatement;
   readonly #reap: PreparedStatement<{ id: number }>;
   readonly #saveCheckpoint: PreparedStatement;
   readonly #getCheckpoint: PreparedStatement<{ cursor_json: string }>;
@@ -198,6 +199,18 @@ export class JobsRepository extends BaseRepository {
               scheduled_at = CASE WHEN attempts >= max_attempts THEN scheduled_at ELSE :retryAt END,
               finished_at  = CASE WHEN attempts >= max_attempts THEN :now ELSE NULL END,
               last_error = :error, last_error_kind = :errorKind, updated_at = :now,
+              lease_owner = NULL, lease_expires_at = NULL
+        WHERE id = :id AND lease_owner = :owner AND lease_epoch = :epoch AND status = 'leased'`,
+    );
+
+    // Giving a job back untouched. Unlike `fail` this records no error, applies
+    // no backoff and consumes no further attempt budget: an interrupted job did
+    // not go wrong, it simply did not finish, and its checkpoint is still
+    // there. Fenced like every other write, so a worker that lost its lease
+    // cannot un-claim work someone else now owns.
+    this.#release = driver.prepare(
+      `UPDATE jobs
+          SET status = 'pending', scheduled_at = :now, updated_at = :now,
               lease_owner = NULL, lease_expires_at = NULL
         WHERE id = :id AND lease_owner = :owner AND lease_epoch = :epoch AND status = 'leased'`,
     );
@@ -349,6 +362,22 @@ export class JobsRepository extends BaseRepository {
    * Record a failure. Requeues with backoff, or marks `failed` once attempts are
    * exhausted. Returns `false` if the lease was lost.
    */
+  /**
+   * Hand a job back to the queue, unfinished and unpenalised.
+   *
+   * The shutdown path. Leaving the lease to expire instead means the job is
+   * invisible for the whole of `jobLeaseSeconds` — the claim only looks at
+   * 'pending' rows and the reaper only at expired ones — so stopping a run and
+   * restarting it immediately would find an empty queue and do nothing, with
+   * every in-flight job silently skipped for the next five minutes.
+   */
+  release(lease: Lease, now: Timestamp = Date.now()): boolean {
+    return (
+      this.#release.run({ id: lease.job.id, owner: lease.owner, epoch: lease.epoch, now })
+        .changes === 1
+    );
+  }
+
   fail(lease: Lease, options: FailOptions): boolean {
     const now = options.now ?? Date.now();
     // Default to a real backoff. Defaulting to `now` would make a failing job
