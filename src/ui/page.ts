@@ -750,6 +750,7 @@ function sheetsBody(busy) {
     '<label>Sheet</label><input type="text" id="g-sheet" placeholder="paste the sheet’s link" style="width:380px" value="' + esc(url) + '"' + off + '>' +
     '<label>Tab</label><input type="text" id="g-tab" style="width:110px" value="' + esc(sheets.sheetName) + '"' + off + '>' +
     '<button class="go ghost" id="g-save"' + off + '>Save</button>' +
+    '<span class="warn" id="g-dirty" hidden>not saved yet</span>' +
     (url ? '<a href="' + esc(url) + '" target="_blank" rel="noopener">open the sheet</a>' : '') +
     '</div><div class="opts"><label>Key file</label>' + key +
     '<label class="chip">' + (sheets.keyFound ? 'Replace key' : 'Choose key file') +
@@ -763,6 +764,32 @@ function sheetsBody(busy) {
     (sheetsCheck ? '<ul class="checks">' + sheetsCheck.map((c) =>
       '<li>' + marks[c.status] + ' <b>' + esc(c.name) + '</b> ' + esc(c.detail) +
       (c.hint && c.status !== 'ok' ? '<div class="muted">' + esc(c.hint) + '</div>' : '') + '</li>').join('') + '</ul>' : '');
+}
+
+/** The id in whatever was pasted, as the server will read it. */
+function sheetIdOf(text) {
+  const t = String(text || '').trim();
+  const m = /\/spreadsheets\/d\/([A-Za-z0-9_-]{20,})/.exec(t);
+  return m ? m[1] : t;
+}
+
+/** Whether the Sheet or Tab box differs from what is saved. */
+function sheetsDirty() {
+  const sheet = $('#g-sheet'), tab = $('#g-tab');
+  if (!sheet) return false;
+  return sheetIdOf(sheet.value) !== (sheets.spreadsheetId || '') ||
+    tab.value.trim() !== sheets.sheetName;
+}
+
+/** Save the Sheet and Tab boxes. Returns false, with the reason shown, on failure. */
+async function saveSheets() {
+  const r = await sheetsPost('/api/sheets/settings',
+    JSON.stringify({ spreadsheet: $('#g-sheet').value, sheetName: $('#g-tab').value }), 'application/json');
+  if (!r) return false;
+  sheets = r;
+  sheetsNote = { tone: r.warning ? 'bad' : 'ok', text: r.warning || 'Saved. The next export uses it.' };
+  sheetsCheck = null;
+  return true;
 }
 
 async function sheetsPost(url, body, contentType) {
@@ -920,18 +947,29 @@ function wireControls() {
   on('#do-export', () => startTask('export', {
     entity: $('#x-entity').value, excelSafe: $('#x-excel').checked,
     splitByState: $('#x-split').checked, full: $('#x-full').checked }));
+  // A typed link survives re-renders, so an unsaved one looks exactly like a
+  // saved one — which is how "Test connection" came to report "not configured"
+  // beside a perfectly good link. Say when it is unsaved, and save it before
+  // anything that depends on it.
+  const sheetInput = $('#g-sheet'), tabInput = $('#g-tab');
+  const markDirty = () => {
+    const dirty = sheetsDirty();
+    $('#g-dirty').hidden = !dirty;
+    $('#do-sheets').disabled = !!ctlState.running || !(sheets.spreadsheetId || sheetInput.value.trim());
+  };
+  if (sheetInput) {
+    sheetInput.addEventListener('input', markDirty);
+    tabInput.addEventListener('input', markDirty);
+    markDirty();
+  }
   on('#g-save', async () => {
-    const r = await sheetsPost('/api/sheets/settings',
-      JSON.stringify({ spreadsheet: $('#g-sheet').value, sheetName: $('#g-tab').value }), 'application/json');
-    if (!r) return;
-    sheetsNote = { tone: r.warning ? 'bad' : 'ok', text: r.warning || 'Saved. The next export uses it.' };
-    sheetsCheck = null;
-    loadControl();
+    if (await saveSheets()) loadControl();
   });
   const keyInput = $('#g-key');
   if (keyInput) keyInput.addEventListener('change', async () => {
     const file = keyInput.files[0];
     if (!file) return;
+    if (sheetsDirty() && !(await saveSheets())) return;
     const r = await sheetsPost('/api/sheets/key', await file.text(), 'application/json');
     if (!r) return;
     sheetsNote = { tone: 'ok', text: 'Key saved. Now share the sheet with the address shown, then test the connection.' };
@@ -939,6 +977,7 @@ function wireControls() {
     loadControl();
   });
   on('#g-test', async () => {
+    if (sheetsDirty() && !(await saveSheets())) return;
     $('#g-test').disabled = true;
     $('#g-test').textContent = 'Testing…';
     const r = await sheetsPost('/api/sheets/check', '{}', 'application/json');
@@ -947,7 +986,10 @@ function wireControls() {
     sheetsNote = null;
     loadControl();
   });
-  on('#do-sheets', () => startTask('export-sheets', { entity: 'leads-flat' }));
+  on('#do-sheets', async () => {
+    if (sheetsDirty() && !(await saveSheets())) return;
+    startTask('export-sheets', { entity: 'leads-flat' });
+  });
 }
 
 // While a task runs, poll often enough that the log feels live.

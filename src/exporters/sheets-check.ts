@@ -32,7 +32,9 @@ export async function checkSheets(config: ResolvedConfig): Promise<SheetsCheck[]
         name: 'Google Sheets',
         status: 'warn',
         detail: 'not configured',
-        hint: 'Set exporters.sheets.spreadsheetId to share results with your team.',
+        hint:
+          'Paste the sheet link in the dashboard (Control, step 7) and press Save,\n' +
+          'or set exporters.sheets.spreadsheetId.',
       },
     ];
   }
