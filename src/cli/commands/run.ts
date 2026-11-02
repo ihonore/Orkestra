@@ -104,6 +104,9 @@ function toPersistable(
       hoursJson: b.hoursJson,
       permanentlyClosed: b.permanentlyClosed,
       extractionSource: JSON.stringify(result.provenance),
+      // The listing's own panel was read (that is where a DOM name comes from),
+      // so what it shows for the website — or that it shows none — is the truth.
+      websiteConfirmed: result.provenance.name === 'dom',
       rawJson: null,
       automationId,
       runId,

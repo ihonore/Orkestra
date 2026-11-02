@@ -329,6 +329,74 @@ describe('XHR channel', () => {
   });
 });
 
+describe('XHR channel: whose data it is', () => {
+  // Measured on the real database before the fix: every name came from XHR,
+  // and 1,537 of 9,457 businesses carried a name shared by 5+ unrelated
+  // listings — "Staybridge Suites Anchorage by IHG" on 194 of them, across 82
+  // categories. A place page's traffic includes other places (nearby hotels,
+  // ads, "people also search for"), and the collector merged them all.
+  const TARGET = '0x56c899c55b426f17:0x279f14fc828309cc';
+  const OTHER = '0x56c899b000000001:0x8e2d9849c189c46e';
+  const targetCid = BigInt('0x279f14fc828309cc').toString(10);
+
+  /** A place-shaped node: fid, name at 11, website somewhere inside. */
+  const place = (fid: string, name: string, website: string, nested: unknown[] = []) => {
+    const node: unknown[] = [fid, 'x', 1, 2, 3, 4, ...nested, website];
+    node[11] = name;
+    return node;
+  };
+
+  it('ignores a payload about another place, even when it arrives last', () => {
+    const collector = new XhrCollector();
+    collector.add(
+      JSON.stringify([
+        place(TARGET, 'Chevrolet of South Anchorage', 'https://www.anchoragechevrolet.com'),
+      ]),
+    );
+    collector.add(
+      JSON.stringify([place(OTHER, 'Staybridge Suites Anchorage by IHG', 'https://www.ihg.com')]),
+    );
+
+    const best = collector.best({ fid: TARGET, cid: null });
+    expect(best.name).toBe('Chevrolet of South Anchorage');
+    expect(best.website).toBe('https://www.anchoragechevrolet.com');
+  });
+
+  it('matches the target by cid when only that is known', () => {
+    const collector = new XhrCollector();
+    collector.add(JSON.stringify([place(OTHER, 'Wrong', 'https://wrong.com')]));
+    collector.add(JSON.stringify([place(TARGET, 'Right', 'https://right.com')]));
+    expect(collector.best({ fid: null, cid: targetCid }).name).toBe('Right');
+  });
+
+  it('takes nothing when no payload is about the target', () => {
+    const collector = new XhrCollector();
+    collector.add(JSON.stringify([place(OTHER, 'Staybridge Suites', 'https://www.ihg.com')]));
+    const best = collector.best({ fid: TARGET, cid: null });
+    expect(best.name).toBeNull();
+    expect(best.website).toBeNull();
+  });
+
+  it("does not read a nested related place's website as the target's own", () => {
+    const related = place(OTHER, 'Nearby Hotel', 'https://nearbyhotel.com');
+    const payload = [place(TARGET, 'Chevrolet', 'https://www.anchoragechevrolet.com', [related])];
+    expect(extractFromXhr(payload, { fid: TARGET, cid: null }).website).toBe(
+      'https://www.anchoragechevrolet.com',
+    );
+  });
+
+  it.each([
+    'https://streetviewpixels-pa.googleapis.com/v1/thumbnail?panoid=gNTW0GyfF9r2&w=211',
+    'https://tpc.googlesyndication.com/simgad/123',
+    'https://lh5.googleusercontent.com/p/AF1Qip',
+    'https://www.google.co.uk/maps',
+    'https://i.ytimg.com/vi/x/hq.jpg',
+  ])('never takes a Google server as the website: %s', (google) => {
+    const payload = [place(TARGET, 'Acme', 'https://acme.com', [google])];
+    expect(extractFromXhr(payload, { fid: TARGET, cid: null }).website).toBe('https://acme.com');
+  });
+});
+
 function dom(overrides: Partial<DomExtraction> = {}): DomExtraction {
   return {
     name: null,
@@ -373,6 +441,24 @@ describe('channel merge', () => {
     expect(result.provenance.cid).toBe('url');
     expect(result.provenance.name).toBe('xhr');
     expect(result.provenance.phoneRaw).toBe('dom');
+  });
+
+  it('takes the name and website from the open listing first', () => {
+    // The panel shows exactly one business, the one being scraped; a network
+    // payload can be about any place the page happened to load.
+    const result = mergeExtractions({
+      url: extractFromUrl(REAL_URL),
+      xhr: { ...EMPTY_XHR, name: 'Staybridge Suites', website: 'https://www.ihg.com' },
+      dom: dom({
+        name: 'Chevrolet of South Anchorage',
+        website: 'https://www.anchoragechevrolet.com',
+      }),
+      gmapsUrl: REAL_URL,
+    });
+    expect(result.business.name).toBe('Chevrolet of South Anchorage');
+    expect(result.business.domain).toBe('anchoragechevrolet.com');
+    expect(result.provenance.name).toBe('dom');
+    expect(result.provenance.websiteRaw).toBe('dom');
   });
 
   it('skips a higher-priority channel that supplies an unusable phone', () => {

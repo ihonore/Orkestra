@@ -256,9 +256,13 @@ export async function runGoogleMapsJob(options: RunJobOptions): Promise<JobOutco
 
       await assertNotBlocked(page, consentAttempts);
 
+      // The place's identity comes from its URL, which cannot be about anyone
+      // else, and it decides which captured payloads may contribute. Payloads
+      // still in flight from the previous listing land here too.
+      const url = extractFromUrl(page.url());
       const merged = mergeExtractions({
-        url: extractFromUrl(page.url()),
-        xhr: xhr.best(),
+        url,
+        xhr: xhr.best({ fid: url.fid, cid: url.cid }),
         dom: await extractFromDom(page),
         gmapsUrl: page.url(),
       });

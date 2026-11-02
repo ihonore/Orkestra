@@ -726,3 +726,26 @@ describe('autopilot', () => {
     expect(tasks.tasks).toEqual([]);
   });
 });
+
+describe('re-scraping finished searches', () => {
+  it('is refused without --control', async () => {
+    const { url } = await serve();
+    expect((await fetch(`${url}/api/jobs/rescrape`, { method: 'POST' })).status).toBe(403);
+  });
+
+  it('puts every finished search back in the queue', async () => {
+    const { url, root } = await serve({ allowControl: true });
+    const config = loadConfig({ cwd: root, env: {} });
+    const driver = openDatabase({ file: config.paths.databaseFile });
+    driver
+      .prepare(
+        `INSERT INTO jobs (automation_id, task_key, params_json, status, created_at, updated_at, finished_at)
+         VALUES ('google-maps', 'a', '{}', 'done', 0, 0, 1), ('google-maps', 'b', '{}', 'pending', 0, 0, NULL)`,
+      )
+      .run();
+    driver.close();
+
+    const response = await fetch(`${url}/api/jobs/rescrape`, { method: 'POST' });
+    expect(await response.json()).toEqual({ queued: 1 });
+  });
+});

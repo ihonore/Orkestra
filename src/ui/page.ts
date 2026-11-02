@@ -469,7 +469,8 @@ export const PAGE = String.raw`<!doctype html>
     <section id="issues">
       <h2>Issues</h2>
       <div class="sub">Jobs that exhausted their attempts, and where each stopped.</div>
-      <div class="tools"><button class="chip" id="retry">Retry all failed</button></div>
+      <div class="tools"><button class="chip" id="retry">Retry all failed</button>
+        <button class="chip" id="rescrape">Re-scrape finished searches</button></div>
       <div class="wrap"><table>
         <thead><tr><th>Job</th><th>Search</th><th>Tries</th><th>Kind</th><th>Error</th></tr></thead>
         <tbody id="fail-body"></tbody>
@@ -1474,12 +1475,24 @@ $('#retry').addEventListener('click', async () => {
   loadIssues(); loadOverview();
 });
 
+$('#rescrape').addEventListener('click', async () => {
+  if (!confirm('Put every finished search back in the queue, so its businesses are read again?\n\n' +
+    'Use this once after an update that fixes how businesses are read. Existing businesses are ' +
+    'corrected in place, not duplicated, and their leads are kept. It takes as long as those ' +
+    'searches took the first time.')) return;
+  const res = await fetch('/api/jobs/rescrape', { method: 'POST' });
+  const r = await res.json();
+  $('#rescrape').textContent = res.ok ? 'Queued ' + num(r.queued) + ' searches' : r.error || 'Not allowed';
+  if (res.ok) loadOverview();
+});
+
 /** Disable the retry button when this dashboard cannot write. */
 async function syncRetryButton() {
   const t = await get('/api/tasks').catch(() => ({ enabled: false }));
   canWrite = t.enabled;
   const button = $('#retry');
   button.disabled = !t.enabled;
+  $('#rescrape').disabled = !t.enabled;
   button.title = t.enabled ? '' : 'Read-only. Restart with --control to retry from this page.';
 }
 

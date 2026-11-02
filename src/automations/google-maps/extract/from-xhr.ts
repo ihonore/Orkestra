@@ -110,31 +110,51 @@ const EMPTY: XhrExtraction = {
   permanentlyClosed: null,
 };
 
-/**
- * Locate the place record inside a payload.
- *
- * Rather than hardcoding one index path — which is exactly what rots — this
- * searches for a node with the *shape* of a place record: an array whose
- * entries include a recognizable place id or a lat/lng pair. Shape-matching
- * survives the payload being re-nested, which positional indexing does not.
- */
-function findPlaceNode(data: unknown, depth = 0): unknown[] | null {
-  if (depth > 8 || !Array.isArray(data)) return null;
-  // Array.isArray on `unknown` narrows to any[]; restate it as unknown[] so
-  // nothing downstream silently inherits `any`.
-  const entries: unknown[] = data as unknown[];
+/** The place a payload must describe for its fields to be used. */
+export interface PlaceIdentity {
+  readonly fid: string | null;
+  readonly cid: string | null;
+}
 
-  // A place record reliably carries a feature id somewhere shallow.
-  const hasPlaceId = entries.some(
-    (entry) => typeof entry === 'string' && /^0x[0-9a-f]+:0x[0-9a-f]+$/i.test(entry),
-  );
-  if (hasPlaceId && entries.length > 5) return entries;
+/** The feature id held directly in this array, if it is a place record. */
+function directFid(node: unknown): string | null {
+  if (!Array.isArray(node)) return null;
+  const entries: unknown[] = node as unknown[];
+  const fid = entries.find((entry) => typeof entry === 'string' && FID_RE.test(entry));
+  return typeof fid === 'string' && entries.length > 5 ? fid.toLowerCase() : null;
+}
 
-  for (const child of entries) {
-    const found = findPlaceNode(child, depth + 1);
-    if (found !== null) return found;
+function cidOfFid(fid: string): string | null {
+  const hex = fid.split(':')[1];
+  if (hex === undefined) return null;
+  try {
+    return BigInt(hex).toString(10);
+  } catch {
+    return null;
   }
-  return null;
+}
+
+/**
+ * Every place record in a payload.
+ *
+ * Shape-matched rather than located by index path, which is exactly what rots:
+ * an array whose own entries include a feature id. A place page's traffic
+ * carries several — the place itself, plus nearby places, ads and "people also
+ * search for" — so all are collected and the caller picks the right one.
+ */
+function findPlaceNodes(data: unknown, depth = 0, found: unknown[][] = []): unknown[][] {
+  if (depth > 8 || !Array.isArray(data)) return found;
+  const entries: unknown[] = data as unknown[];
+  if (directFid(entries) !== null) found.push(entries);
+  for (const child of entries) findPlaceNodes(child, depth + 1, found);
+  return found;
+}
+
+function isTarget(node: unknown[], target: PlaceIdentity): boolean {
+  const fid = directFid(node);
+  if (fid === null) return false;
+  if (target.fid !== null && fid === target.fid.toLowerCase()) return true;
+  return target.cid !== null && cidOfFid(fid) === target.cid;
 }
 
 /**
@@ -147,6 +167,7 @@ function findPlaceNode(data: unknown, depth = 0): unknown[] | null {
 function findFirst(
   data: unknown,
   predicate: (value: unknown) => boolean,
+  ownFid: string | null = null,
   depth = 0,
   maxDepth = 10,
 ): unknown {
@@ -154,10 +175,32 @@ function findFirst(
   if (predicate(data)) return data;
   if (!Array.isArray(data)) return undefined;
   for (const child of data) {
-    const found = findFirst(child, predicate, depth + 1, maxDepth);
+    // A nested record for a different place — a related listing inside this
+    // one — holds that place's website and phone, not ours. Skip it whole.
+    const childFid = directFid(child);
+    if (ownFid !== null && childFid !== null && childFid !== ownFid) continue;
+    const found = findFirst(child, predicate, ownFid, depth + 1, maxDepth);
     if (found !== undefined) return found;
   }
   return undefined;
+}
+
+/**
+ * Hosts that are Google's infrastructure, never a business's own site. The
+ * old check named google.com and a few asset hosts, and missed the rest: 849
+ * businesses had a Street View thumbnail on streetviewpixels-pa.googleapis.com
+ * as their "website", and 51 an ad server.
+ */
+const GOOGLE_HOST_RE =
+  /(^|\.)(google\.[a-z.]+|googleapis\.com|gstatic\.com|ggpht\.com|googleusercontent\.com|googlesyndication\.com|googleadservices\.com|doubleclick\.net|ytimg\.com|gvt1\.com|goo\.gl)$/i;
+
+function isBusinessUrl(value: unknown): boolean {
+  if (typeof value !== 'string' || !URL_RE.test(value)) return false;
+  try {
+    return !GOOGLE_HOST_RE.test(new URL(value).hostname);
+  } catch {
+    return false;
+  }
 }
 
 const FID_RE = /^0x[0-9a-f]+:0x[0-9a-f]+$/i;
@@ -179,13 +222,24 @@ const PHONE_RE = /^(?:\+1[\s-]?)?\(?[2-9]\d{2}\)?[\s.-]?[2-9]\d{2}[\s.-]?\d{4}$/
  * yields nulls, the DOM channel fills the gap, and the health guard notices the
  * fill-rate drop — rather than the job throwing and the run stopping.
  */
-export function extractFromXhr(payload: unknown): XhrExtraction {
+export function extractFromXhr(payload: unknown, target?: PlaceIdentity): XhrExtraction {
   if (payload === null || payload === undefined) return EMPTY;
 
-  const node = findPlaceNode(payload) ?? payload;
+  // With a target, only its own record counts, and a payload about other
+  // places contributes nothing. Without one (an unidentifiable page), the
+  // first record is the best guess, as before.
+  const nodes = findPlaceNodes(payload);
+  const node: unknown =
+    target !== undefined && (target.fid !== null || target.cid !== null)
+      ? nodes.find((n) => isTarget(n, target))
+      : (nodes[0] ?? payload);
+  if (node === undefined) return EMPTY;
+  const own = directFid(node);
 
-  const fid = asString(findFirst(node, (v) => typeof v === 'string' && FID_RE.test(v)));
-  const placeId = asString(findFirst(node, (v) => typeof v === 'string' && PLACE_ID_RE.test(v)));
+  const fid = own ?? asString(findFirst(node, (v) => typeof v === 'string' && FID_RE.test(v)));
+  const placeId = asString(
+    findFirst(node, (v) => typeof v === 'string' && PLACE_ID_RE.test(v), own),
+  );
 
   let cid: string | null = null;
   if (fid !== null) {
@@ -199,40 +253,35 @@ export function extractFromXhr(payload: unknown): XhrExtraction {
     }
   }
 
-  const website = asString(
-    findFirst(
-      node,
-      (v) =>
-        typeof v === 'string' &&
-        URL_RE.test(v) &&
-        // Exclude Google's own asset and redirect URLs, which are plentiful.
-        !/(^|\.)(google|gstatic|ggpht|googleusercontent)\.com/i.test(v),
-    ),
-  );
+  const website = asString(findFirst(node, isBusinessUrl, own));
 
   const phone = asString(
-    findFirst(node, (v) => typeof v === 'string' && PHONE_RE.test(v) && /\d{7}/.test(v)),
+    findFirst(node, (v) => typeof v === 'string' && PHONE_RE.test(v) && /\d{7}/.test(v), own),
   );
 
   // Coordinates arrive as a [lat, lng] pair of plausible magnitude.
-  const coords = findFirst(node, (v) => {
-    if (!Array.isArray(v)) return false;
-    const pair: unknown[] = v as unknown[];
-    if (pair.length < 2) return false;
-    const [a, b] = pair;
-    return (
-      typeof a === 'number' &&
-      typeof b === 'number' &&
-      Math.abs(a) <= 90 &&
-      Math.abs(b) <= 180 &&
-      // Reject [0,0] and integer pairs, which are almost always something else.
-      !Number.isInteger(a) &&
-      !Number.isInteger(b)
-    );
-  });
+  const coords = findFirst(
+    node,
+    (v) => {
+      if (!Array.isArray(v)) return false;
+      const pair: unknown[] = v as unknown[];
+      if (pair.length < 2) return false;
+      const [a, b] = pair;
+      return (
+        typeof a === 'number' &&
+        typeof b === 'number' &&
+        Math.abs(a) <= 90 &&
+        Math.abs(b) <= 180 &&
+        // Reject [0,0] and integer pairs, which are almost always something else.
+        !Number.isInteger(a) &&
+        !Number.isInteger(b)
+      );
+    },
+    own,
+  );
 
   const rating = asNumber(
-    findFirst(node, (v) => typeof v === 'number' && v > 0 && v <= 5 && !Number.isInteger(v)),
+    findFirst(node, (v) => typeof v === 'number' && v > 0 && v <= 5 && !Number.isInteger(v), own),
   );
 
   return {
@@ -284,10 +333,10 @@ export class XhrCollector {
    * gets overwritten by a non-null value — a later, thinner payload cannot
    * erase what an earlier one supplied.
    */
-  best(): XhrExtraction {
+  best(target?: PlaceIdentity): XhrExtraction {
     let merged: XhrExtraction = EMPTY;
     for (const payload of this.#payloads) {
-      const next = extractFromXhr(payload);
+      const next = extractFromXhr(payload, target);
       merged = {
         name: next.name ?? merged.name,
         placeId: next.placeId ?? merged.placeId,

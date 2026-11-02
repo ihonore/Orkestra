@@ -112,8 +112,9 @@ export function mergeExtractions(input: MergeInput): MergeResult {
     field: keyof MergedBusiness,
     candidates: Partial<Record<Channel, T | null | undefined>>,
     isValid?: (value: T) => boolean,
+    fieldOrder: readonly Channel[] = order,
   ): T | null => {
-    const { value, channel } = pick(order, candidates, isValid);
+    const { value, channel } = pick(fieldOrder, candidates, isValid);
     if (channel !== null) provenance[field] = channel;
     return value;
   };
@@ -126,11 +127,23 @@ export function mergeExtractions(input: MergeInput): MergeResult {
   const fid = input.url.fid;
   if (fid !== null) provenance.fid = 'url';
 
-  const name = take<string>('name', {
-    xhr: input.xhr.name,
-    dom: input.dom.name,
-    url: input.url.nameHint,
-  });
+  // Name and website come from the open listing first. The panel shows exactly
+  // one business — the one being scraped — while network traffic can be about
+  // any place the page loaded. With XHR first, every name in the database came
+  // from XHR, and 1,537 of 9,457 were another place's. XHR is still the
+  // fallback, now restricted to the target's own record.
+  const panelFirst: readonly Channel[] = ['dom', 'xhr', 'url'];
+
+  const name = take<string>(
+    'name',
+    {
+      xhr: input.xhr.name,
+      dom: input.dom.name,
+      url: input.url.nameHint,
+    },
+    undefined,
+    panelFirst,
+  );
 
   // Only accept a phone that actually normalizes. See {@link pick}.
   const phoneRaw = take<string>(
@@ -148,7 +161,12 @@ export function mergeExtractions(input: MergeInput): MergeResult {
 
   // The website is unwrapped before anything downstream sees it. Skipping this
   // sends the whole email stage to google.com.
-  const websiteRaw = take<string>('websiteRaw', { xhr: input.xhr.website, dom: input.dom.website });
+  const websiteRaw = take<string>(
+    'websiteRaw',
+    { xhr: input.xhr.website, dom: input.dom.website },
+    undefined,
+    panelFirst,
+  );
   const websiteUrl = normalizeWebsiteUrl(websiteRaw);
   const domainInfo = domainOf(websiteUrl);
 

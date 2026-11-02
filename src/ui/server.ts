@@ -840,6 +840,29 @@ export function startUiServer(options: UiServerOptions): Promise<RunningServer> 
         return;
       }
 
+      if (url.pathname === '/api/jobs/rescrape' && req.method === 'POST') {
+        // Every finished search back into the queue, so its businesses are
+        // read again with the current extraction. Businesses are matched and
+        // updated, never duplicated; each search re-runs once.
+        if (tasks === null) {
+          json(res, 403, { error: 'controls are disabled — restart with --control' });
+          return;
+        }
+        const driver = openDatabaseFromConfig(config);
+        try {
+          const n = new JobsRepository(driver).retry({
+            automationId: 'google-maps',
+            status: 'done',
+          });
+          syncQueue(driver);
+          options.logger?.info({ count: n }, 'finished searches queued for a re-scrape');
+          json(res, 200, { queued: n });
+        } finally {
+          driver.close();
+        }
+        return;
+      }
+
       if (url.pathname === '/api/seeds' && req.method === 'GET') {
         const kind = url.searchParams.get('kind') === 'categories' ? 'categories' : 'cities';
         json(

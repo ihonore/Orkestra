@@ -49,6 +49,17 @@ export interface BusinessInput {
   readonly rawJson: string | null;
   readonly automationId: string;
   readonly runId: string;
+  /**
+   * The website (or its absence) was read from the listing itself, so it is the
+   * truth and replaces what is stored — including with nothing. Otherwise a
+   * missing website keeps the stored one, because a half-loaded page says
+   * nothing either way.
+   *
+   * Without this, a wrong website could never be corrected away: 849
+   * businesses had a Street View image as their website, most of which really
+   * have none, and COALESCE kept the image through every re-scrape.
+   */
+  readonly websiteConfirmed?: boolean;
 }
 
 export interface SightingInput {
@@ -79,8 +90,9 @@ export interface BusinessRecord {
 }
 
 export class BusinessesRepository extends BaseRepository {
-  readonly #findByDedup: PreparedStatement<{ id: number }>;
-  readonly #findByCid: PreparedStatement<{ id: number }>;
+  readonly #findByDedup: PreparedStatement<{ id: number; domain_id: number | null }>;
+  readonly #findByCid: PreparedStatement<{ id: number; domain_id: number | null }>;
+  readonly #dropForeignLinks: PreparedStatement;
   readonly #insert: PreparedStatement<{ id: number }>;
   readonly #update: PreparedStatement;
   readonly #insertSighting: PreparedStatement;
@@ -89,10 +101,21 @@ export class BusinessesRepository extends BaseRepository {
   constructor(driver: SqliteDriver) {
     super(driver);
 
-    this.#findByDedup = driver.prepare<{ id: number }>(
-      `SELECT id FROM businesses WHERE dedup_hash = ?`,
+    this.#findByDedup = driver.prepare<{ id: number; domain_id: number | null }>(
+      `SELECT id, domain_id FROM businesses WHERE dedup_hash = ?`,
     );
-    this.#findByCid = driver.prepare<{ id: number }>(`SELECT id FROM businesses WHERE cid = ?`);
+    this.#findByCid = driver.prepare<{ id: number; domain_id: number | null }>(
+      `SELECT id, domain_id FROM businesses WHERE cid = ?`,
+    );
+
+    // Email links found by crawling a site that is no longer this business's
+    // website. They were never its addresses; leaving them would keep another
+    // company's emails on this lead after its website was corrected.
+    this.#dropForeignLinks = driver.prepare(
+      `DELETE FROM business_emails
+        WHERE business_id = :id
+          AND (:domainId IS NULL OR source_domain_id IS NOT :domainId)`,
+    );
 
     this.#insert = driver.prepare<{ id: number }>(
       `INSERT INTO businesses (
@@ -137,9 +160,12 @@ export class BusinessesRepository extends BaseRepository {
          lat = COALESCE(:lat, lat),
          lng = COALESCE(:lng, lng),
          plus_code = COALESCE(:plusCode, plus_code),
-         website_raw = COALESCE(:websiteRaw, website_raw),
-         website_url = COALESCE(:websiteUrl, website_url),
-         domain_id = COALESCE(:domainId, domain_id),
+         website_raw = CASE WHEN :websiteConfirmed = 1 THEN :websiteRaw
+                            ELSE COALESCE(:websiteRaw, website_raw) END,
+         website_url = CASE WHEN :websiteConfirmed = 1 THEN :websiteUrl
+                            ELSE COALESCE(:websiteUrl, website_url) END,
+         domain_id = CASE WHEN :websiteConfirmed = 1 THEN :domainId
+                          ELSE COALESCE(:domainId, domain_id) END,
          gmaps_url = COALESCE(:gmapsUrl, gmaps_url),
          thumbnail_url = COALESCE(:thumbnailUrl, thumbnail_url),
          hours_json = COALESCE(:hoursJson, hours_json),
@@ -223,7 +249,16 @@ export class BusinessesRepository extends BaseRepository {
       this.#findByDedup.get([input.dedupHash]);
 
     if (existing !== undefined) {
-      this.#update.run({ ...params, id: existing.id });
+      // Only the update mentions it, and the driver rejects a named parameter
+      // a statement does not use — so it cannot ride in the shared params.
+      this.#update.run({
+        ...params,
+        id: existing.id,
+        websiteConfirmed: input.websiteConfirmed === true ? 1 : 0,
+      });
+      const changedSite =
+        input.websiteConfirmed === true && (input.domainId ?? null) !== existing.domain_id;
+      if (changedSite) this.#dropForeignLinks.run({ id: existing.id, domainId: input.domainId });
       return { id: existing.id, created: false };
     }
 
