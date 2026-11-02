@@ -29,6 +29,7 @@ function input(snapshot: Partial<Snapshot>, extra: Partial<DecideInput> = {}): D
       rowsUnsent: 0,
       lastSentAt: null,
       sheetEntity: 'leads-by-business',
+      rescrape: null,
       ...snapshot,
     },
     running: new Set<TaskName>(),
@@ -108,6 +109,25 @@ describe('autopilot decisions', () => {
   it('sends whichever export the sheet layout names', () => {
     const d = decide(input({ rowsUnsent: 600, sheetEntity: 'leads-flat' }));
     expect(d.start).toContainEqual({ stage: 'sheets', input: { entity: 'leads-flat' } });
+  });
+
+  it('holds the sheet while a re-scrape is correcting the data, and says how far it has got', () => {
+    const busy = new Set<TaskName>(['run', 'enrich']);
+    const d = decide(
+      input(
+        { searchesQueued: 900, rowsUnsent: 5_000, rescrape: { total: 2_000, remaining: 700 } },
+        { running: busy },
+      ),
+    );
+    expect(started(d)).toEqual([]);
+    expect(d.status.sheets.detail).toBe(
+      'holding until the re-scrape finishes: 1,300 of 2,000 searches re-read',
+    );
+  });
+
+  it('resumes sending once the re-scrape is done', () => {
+    const d = decide(input({ rowsUnsent: 5_000, rescrape: null }));
+    expect(started(d)).toContain('sheets');
   });
 
   it('says the sheet is not set up rather than failing every tick', () => {
@@ -210,6 +230,7 @@ describe('the autopilot controller', () => {
         rowsUnsent: 0,
         lastSentAt: null,
         sheetEntity: 'leads-by-business',
+        rescrape: null,
         ...snapshot,
       }),
       tasks: {

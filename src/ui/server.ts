@@ -46,6 +46,7 @@ import {
 } from '../views/index.js';
 import { Autopilot, normalizeAutopilot, type Snapshot } from './autopilot.js';
 import { queueView, setQueuePlan, syncQueue } from '../seeds/queue.js';
+import { requeueFinished, rescrapeProgress } from '../seeds/rescrape.js';
 import {
   addCategory,
   addCity,
@@ -110,6 +111,7 @@ function autopilotSnapshot(
   }
 
   return {
+    rescrape: rescrapeProgress(driver),
     // Exactly what a worker could claim: the same conditions as the claim.
     searchesQueued: count(
       `SELECT COUNT(*) AS n FROM jobs
@@ -865,11 +867,9 @@ export function startUiServer(options: UiServerOptions): Promise<RunningServer> 
         }
         const driver = openDatabaseFromConfig(config);
         try {
-          const n = new JobsRepository(driver).retry({
-            automationId: 'google-maps',
-            status: 'done',
-          });
-          syncQueue(driver);
+          // Also holds the sheet until these have run, so it never receives
+          // the data the re-scrape exists to correct.
+          const n = requeueFinished(driver);
           options.logger?.info({ count: n }, 'finished searches queued for a re-scrape');
           json(res, 200, { queued: n });
         } finally {

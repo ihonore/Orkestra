@@ -127,6 +127,8 @@ export interface Snapshot {
   readonly sheetEntity: string;
   /** When the sheet last received rows, if ever. */
   readonly lastSentAt: number | null;
+  /** A re-scrape in progress, which holds the sheet back until it finishes. */
+  readonly rescrape: { readonly total: number; readonly remaining: number } | null;
 }
 
 /** One of the three stages, which map one-to-one onto task names. */
@@ -243,6 +245,15 @@ export function decide(input: DecideInput): Decision {
           : 'rows';
     if (unsent === null) {
       sheets = { state: 'blocked', detail: 'not set up: add the sheet and key in step 7' };
+    } else if (snapshot.rescrape !== null) {
+      // Sending now would ship the very data the re-scrape is correcting.
+      const { total, remaining } = snapshot.rescrape;
+      sheets = {
+        state: 'waiting',
+        detail:
+          `holding until the re-scrape finishes: ${(total - remaining).toLocaleString()} of ` +
+          `${total.toLocaleString()} searches re-read`,
+      };
     } else if (unsent === 0) {
       sheets = { state: 'idle', detail: 'the sheet is up to date' };
     } else {

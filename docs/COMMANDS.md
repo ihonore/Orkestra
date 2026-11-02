@@ -676,6 +676,14 @@ found *after* a business was exported still reach the sheet.
 The first `gms db migrate` on a new database also loads `seeds/` (see
 [Seed data](#seed-data)).
 
+After the update that fixed names and websites being taken from other places,
+`gms db migrate` also re-queues every finished search, once per database, so
+those businesses are read again and corrected in place. While any of those
+searches is still waiting, autopilot sends nothing to the sheet. The panel
+shows "holding until the re-scrape finishes: N of M searches re-read", and
+sending resumes by itself afterwards. The **Re-scrape finished searches**
+button on the Issues page does the same on demand.
+
 Use `gms db backup`, never `cp`: copying an open SQLite database picks up the
 `-wal` and `-shm` sidecars inconsistently and yields a file that may not open.
 

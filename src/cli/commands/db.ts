@@ -8,6 +8,7 @@ import { checkIntegrity, describeDatabase, openDatabaseFromConfig } from '../../
 import { appliedMigrations, migrate, pendingMigrations } from '../../db/migrate.js';
 import { MetaRepository, META_KEYS } from '../../db/repositories/meta.js';
 import { loadBundledSeedsOnce } from '../../seeds/bundled.js';
+import { requeueAfterExtractionFix } from '../../seeds/rescrape.js';
 import { APP_VERSION } from '../../version.js';
 import { formatBytes, formatDuration, heading, keyValue, style, symbol } from '../output.js';
 
@@ -68,6 +69,20 @@ export function runDbMigrate(options: DbCommandOptions & { dryRun: boolean }): v
         seeded.categories !== null ? `${seeded.categories.result.inserted} services` : null,
       ].filter((part) => part !== null);
       console.log(`${symbol.ok} loaded ${parts.join(' and ')} from seeds/`);
+    }
+
+    // Businesses saved before the extraction fix may carry another place's
+    // name or website. Re-reading their searches corrects them in place, and
+    // autopilot holds the sheet until it is done — so updating the VPS is the
+    // only action needed. Once per database.
+    const requeued = requeueAfterExtractionFix(driver);
+    if (requeued > 0) {
+      console.log(
+        `${symbol.ok} queued ${requeued.toLocaleString()} finished searches to re-read with the fixed extraction`,
+      );
+      console.log(
+        style.grey('  the sheet waits until they have run, so it only receives corrected data'),
+      );
     }
   } finally {
     driver.close();

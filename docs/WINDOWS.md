@@ -64,6 +64,10 @@ Keep machine-specific settings in `gms.config.local.yaml` (the dashboard's
 Settings page writes there). Editing `gms.config.yaml` on the VPS would make
 the update's `git pull` fail.
 
+Some updates correct data already scraped. When one does, the update queues
+the searches to re-read by itself, and autopilot holds the sheet until they
+have run. There is nothing to do but click **Update GMS**.
+
 ## Day to day
 
 **Turn on Autopilot** at the top of the Control page and leave it. It keeps
