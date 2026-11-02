@@ -37,13 +37,14 @@ import type { Logger } from '../core/logging/logger.js';
 import { saveSeedFiles } from '../seeds/bundled.js';
 import { MetaRepository } from '../db/repositories/meta.js';
 import { ExportsRepository } from '../db/repositories/exports.js';
-import { VIEWS, countRemaining, sharedLeadEntity, startingCursor } from '../views/index.js';
 import {
-  Autopilot,
-  normalizeAutopilot,
-  type AutopilotSettings,
-  type Snapshot,
-} from './autopilot.js';
+  SHEET_LAYOUT_ENTITY,
+  VIEWS,
+  countRemaining,
+  sharedLeadEntity,
+  startingCursor,
+} from '../views/index.js';
+import { Autopilot, normalizeAutopilot, type Snapshot } from './autopilot.js';
 import { queueView, setQueuePlan, syncQueue } from '../seeds/queue.js';
 import {
   addCategory,
@@ -84,7 +85,7 @@ const AUTOPILOT_KEY = 'autopilot';
 /** What autopilot needs to know, read in one short read-only visit. */
 function autopilotSnapshot(
   driver: ReturnType<typeof openDatabaseFromConfig>,
-  settings: AutopilotSettings,
+  entity: string,
   spreadsheetId: string | null,
 ): Snapshot {
   const count = (sql: string, params: readonly (string | number)[] = []): number =>
@@ -93,11 +94,10 @@ function autopilotSnapshot(
   let rowsUnsent: number | null = null;
   let lastSentAt: number | null = null;
   if (spreadsheetId !== null && spreadsheetId !== '') {
-    const entity = settings.sheets.onlyWithEmail ? 'leads-with-email' : 'leads-flat';
-    const partner = sharedLeadEntity(entity)!;
+    const partner = sharedLeadEntity(entity);
     const cursors = new ExportsRepository(driver);
     const own = cursors.position('sheets', spreadsheetId, entity);
-    const other = cursors.position('sheets', spreadsheetId, partner);
+    const other = partner === null ? null : cursors.position('sheets', spreadsheetId, partner);
     const toCursor = (row: typeof own) =>
       row === null ? null : { lastId: row.last_id, lastSubId: row.last_sub_id };
     rowsUnsent = countRemaining(
@@ -124,6 +124,7 @@ function autopilotSnapshot(
     ),
     rowsUnsent,
     lastSentAt,
+    sheetEntity: entity,
   };
 }
 
@@ -131,8 +132,12 @@ function autopilotSnapshot(
 const SHEETS_KEYS = new Set([
   'exporters.sheets.spreadsheetId',
   'exporters.sheets.sheetName',
+  'exporters.sheets.businessSheetName',
+  'exporters.sheets.layout',
   'exporters.sheets.credentialsFile',
 ]);
+
+const SHEET_LAYOUTS = new Set(['business', 'email', 'all']);
 
 /**
  * Commands the dashboard may start, and how its form fields map to flags.
@@ -223,7 +228,13 @@ const COMMANDS: Record<
 };
 
 /** Views the export commands accept, as the CLI's --entity choices. */
-const EXPORT_ENTITIES = new Set(['leads-flat', 'leads-with-email', 'businesses', 'emails']);
+const EXPORT_ENTITIES = new Set([
+  'leads-flat',
+  'leads-with-email',
+  'leads-by-business',
+  'businesses',
+  'emails',
+]);
 
 function buildImport(what: 'cities' | 'categories', input: Record<string, unknown>): string[] {
   const file = typeof input['file'] === 'string' ? input['file'] : '';
@@ -530,11 +541,15 @@ export function startUiServer(options: UiServerOptions): Promise<RunningServer> 
               driver.close();
             }
           },
-          snapshot: (settings) => {
-            const spreadsheetId = freshConfig().exporters.sheets.spreadsheetId;
+          snapshot: () => {
+            const sheets = freshConfig().exporters.sheets;
             const driver = openDatabaseFromConfig(config, { readonly: true });
             try {
-              return autopilotSnapshot(driver, settings, spreadsheetId ?? null);
+              return autopilotSnapshot(
+                driver,
+                SHEET_LAYOUT_ENTITY[sheets.layout],
+                sheets.spreadsheetId ?? null,
+              );
             } finally {
               driver.close();
             }
@@ -943,7 +958,10 @@ export function startUiServer(options: UiServerOptions): Promise<RunningServer> 
           fresh,
           view: {
             spreadsheetId: settings.spreadsheetId ?? null,
-            sheetName: settings.sheetName,
+            layout: settings.layout,
+            // The tab the chosen layout writes to: by-business has its own.
+            sheetName:
+              settings.layout === 'business' ? settings.businessSheetName : settings.sheetName,
             credentialsFile: settings.credentialsFile ?? null,
             keyFound: keyFile !== undefined && fs.existsSync(keyFile),
             clientEmail: keyFile !== undefined ? keyEmail(keyFile) : null,
@@ -963,7 +981,11 @@ export function startUiServer(options: UiServerOptions): Promise<RunningServer> 
           return;
         }
         readBody(req, (body) => {
-          const input = body as { spreadsheet?: unknown; sheetName?: unknown };
+          const input = body as { spreadsheet?: unknown; sheetName?: unknown; layout?: unknown };
+          const layout =
+            typeof input.layout === 'string' && SHEET_LAYOUTS.has(input.layout)
+              ? (input.layout as 'business' | 'email' | 'all')
+              : 'business';
           const spreadsheetId = parseSpreadsheetId(input.spreadsheet);
           if (spreadsheetId === null) {
             json(res, 400, {
@@ -972,7 +994,9 @@ export function startUiServer(options: UiServerOptions): Promise<RunningServer> 
             });
             return;
           }
-          const sheetName = parseSheetName(input.sheetName ?? 'Leads');
+          const sheetName = parseSheetName(
+            input.sheetName ?? (layout === 'business' ? 'Leads by business' : 'Leads'),
+          );
           if (sheetName === null) {
             json(res, 400, { error: 'The tab name must be 1 to 100 characters.' });
             return;
@@ -981,7 +1005,10 @@ export function startUiServer(options: UiServerOptions): Promise<RunningServer> 
             config,
             {
               'exporters.sheets.spreadsheetId': spreadsheetId,
-              'exporters.sheets.sheetName': sheetName,
+              'exporters.sheets.layout': layout,
+              [layout === 'business'
+                ? 'exporters.sheets.businessSheetName'
+                : 'exporters.sheets.sheetName']: sheetName,
             },
             SHEETS_KEYS,
           );
@@ -992,7 +1019,10 @@ export function startUiServer(options: UiServerOptions): Promise<RunningServer> 
           const { view } = sheetsSettings();
           // Something can outrank the local file. Saying "saved" while the old
           // id stays in force would be a lie, so say what is in the way.
-          const overridden = view.spreadsheetId !== spreadsheetId || view.sheetName !== sheetName;
+          const overridden =
+            view.spreadsheetId !== spreadsheetId ||
+            view.sheetName !== sheetName ||
+            view.layout !== layout;
           json(res, 200, {
             ...view,
             ...(overridden && {

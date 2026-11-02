@@ -579,12 +579,25 @@ A local web page showing progress, leads, failures and exports — and, with
 All three exports read the database and never change your leads. They resume
 from a stored position, so running them repeatedly only sends what is new.
 
-Entities: `leads-flat` (one row per business and email, including businesses
-with none yet), **`leads-with-email`** (the same columns, only rows with an
-email, each sent once), `businesses` and `emails`. `leads-with-email` is what
-autopilot sends to the sheet by default. A business without an email is a blank
-row in `leads-flat`, then a second row once one is found. In Sheets the two lead
-exports share a tab and a position, so neither re-sends what the other sent.
+Entities:
+
+- **`leads-by-business`**: one row per business that has an email. `email` holds
+  the best address, and `other_emails` lists the rest, best first. "Best" means
+  a named person at the business's own domain, then a role address there
+  (info@, contact@), then other business mail, then free mail like Gmail. A
+  business is sent once, with all the addresses its website crawl found. One
+  that gains an address on a recrawl months later is not sent again.
+- `leads-with-email`: one row per address, only businesses with an email.
+- `leads-flat`: one row per address, plus businesses with none yet. Such a
+  business is a blank row now, then a second row once an email is found.
+- `businesses` and `emails`.
+
+The sheet's **layout** setting (`exporters.sheets.layout`: `business`, `email`
+or `all`, set in step 7) chooses among the first three for `gms export sheets`,
+the dashboard's button and autopilot alike. The default is `business`, written
+to its own tab, `exporters.sheets.businessSheetName` ("Leads by business"),
+because its columns differ. The two per-address exports share a tab and a
+position, so neither re-sends what the other sent.
 
 ### `gms export csv`
 

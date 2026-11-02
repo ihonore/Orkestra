@@ -42,8 +42,9 @@ never overwrite real data.
 
 All from the dashboard, in step 7 (**Share with your team**) on the Control page:
 
-1. Paste the sheet's link into **Sheet**, check the **Tab** name, and press
-   **Save**.
+1. Paste the sheet's link into **Sheet**, choose the **Layout** (one row per
+   business is the default, in its own tab "Leads by business"), check the
+   **Tab** name, and press **Save**.
 2. **Choose key file** and pick the service account's `.json` key. It is
    checked, stored in `C:\Users\<you>\gms-credentials\`, and recorded in
    `gms.config.local.yaml`. The page then shows the account's address.

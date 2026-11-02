@@ -465,7 +465,7 @@ export function buildProgram(): Command {
     .description('export to CSV, resuming from the last position')
     .addOption(
       new Option('-e, --entity <name>', 'what to export')
-        .choices(['leads-flat', 'leads-with-email', 'businesses', 'emails'])
+        .choices(['leads-flat', 'leads-with-email', 'leads-by-business', 'businesses', 'emails'])
         .default('leads-flat'),
     )
     .option('-o, --out-dir <path>', 'output directory (default: dataDir/exports)')
@@ -512,9 +512,11 @@ export function buildProgram(): Command {
     .command('sheets')
     .description('push results to a shared Google Sheet, resuming from the last position')
     .addOption(
-      new Option('-e, --entity <name>', 'what to export')
-        .choices(['leads-flat', 'leads-with-email', 'businesses', 'emails'])
-        .default('leads-flat'),
+      // No default here: without --entity, exporters.sheets.layout decides.
+      new Option(
+        '-e, --entity <name>',
+        'what to export (default: exporters.sheets.layout)',
+      ).choices(['leads-flat', 'leads-with-email', 'leads-by-business', 'businesses', 'emails']),
     )
     .option('-s, --spreadsheet-id <id>', 'from the sheet URL (overrides config)')
     .option('-t, --tab <name>', 'sheet tab name')
@@ -522,7 +524,7 @@ export function buildProgram(): Command {
     .option('--json', 'emit machine-readable output', false)
     .action(
       async (options: {
-        entity: string;
+        entity?: string;
         spreadsheetId?: string;
         tab?: string;
         full: boolean;
@@ -530,7 +532,7 @@ export function buildProgram(): Command {
       }) => {
         await runExportSheets({
           config: configFrom(program),
-          entity: options.entity,
+          ...(options.entity !== undefined && { entity: options.entity }),
           ...(options.spreadsheetId !== undefined && { spreadsheetId: options.spreadsheetId }),
           ...(options.tab !== undefined && { sheetName: options.tab }),
           full: options.full,

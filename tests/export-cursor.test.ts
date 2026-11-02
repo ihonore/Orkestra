@@ -26,6 +26,7 @@ import { ExportsRepository } from '../src/db/repositories/exports.js';
 import type { SqliteDriver } from '../src/db/driver/types.js';
 import {
   BUSINESSES,
+  LEADS_BY_BUSINESS,
   LEADS_FLAT,
   LEADS_WITH_EMAIL_VIEW,
   countRemaining,
@@ -60,15 +61,28 @@ function addEmail(
   driver: SqliteDriver,
   businessId: number,
   address: string,
-  options: { junk?: boolean } = {},
+  options: { junk?: boolean; role?: boolean; free?: boolean } = {},
 ): void {
   const [local = '', domain = ''] = address.split('@');
   const email = driver
     .prepare(
-      `INSERT INTO emails (address, local_part, email_domain, is_junk, first_seen_at)
-       VALUES (?, ?, ?, ?, 0)`,
+      `INSERT OR IGNORE INTO emails (address, local_part, email_domain, is_junk, is_role, is_free,
+                                     first_seen_at)
+       VALUES (?, ?, ?, ?, ?, ?, 0)`,
     )
-    .run([address, local, domain, options.junk === true ? 1 : 0]);
+    .run([
+      address,
+      local,
+      domain,
+      options.junk === true ? 1 : 0,
+      options.role === true ? 1 : 0,
+      options.free === true ? 1 : 0,
+    ]);
+  const emailId =
+    email.changes > 0
+      ? Number(email.lastInsertRowid)
+      : driver.prepare<{ id: number }>(`SELECT id FROM emails WHERE address = ?`).get([address])!
+          .id;
 
   driver
     .prepare(
@@ -76,7 +90,16 @@ function addEmail(
          (business_id, email_id, source_url, method, confidence, first_seen_at)
        VALUES (?, ?, 'https://example.com', 'mailto', 1.0, 0)`,
     )
-    .run([businessId, Number(email.lastInsertRowid)]);
+    .run([businessId, emailId]);
+}
+
+/** Give a business a website domain, so "its own domain" means something. */
+function setDomain(driver: SqliteDriver, businessId: number, domain: string): void {
+  const id = Number(
+    driver.prepare(`INSERT INTO domains (domain, created_at) VALUES (?, 0)`).run([domain])
+      .lastInsertRowid,
+  );
+  driver.prepare(`UPDATE businesses SET domain_id = ? WHERE id = ?`).run([id, businessId]);
 }
 
 /** Drain the view the way an exporter does, returning every row it hands over. */
@@ -335,5 +358,73 @@ describe('leads with an email only', () => {
     // never gets a blank row; Biz Two has none yet, so it gets exactly one.
     expect(emailsIn(rows)).toEqual([]);
     expect(rows.map((r) => r['name'])).toEqual(['Biz Two']);
+  });
+});
+
+describe('one row per business', () => {
+  // The layout the team's sheet uses: a business with five addresses used to
+  // fill five rows.
+  const send = (driver: SqliteDriver, from = START, pageSize = 1_000) =>
+    exportAll(driver, from, pageSize, LEADS_BY_BUSINESS);
+
+  it('lists each business once, with its best address first and the rest beside it', () => {
+    const driver = db();
+    const synergy = addBusiness(driver, 'Synergy Business Brokers');
+    setDomain(driver, synergy, 'synergybb.com');
+    addEmail(driver, synergy, 'info@synergybb.com', { role: true });
+    addEmail(driver, synergy, 'bo@gmail.com', { free: true });
+    addEmail(driver, synergy, 'ashish@synergybb.com');
+    addEmail(driver, synergy, 'partner@otherfirm.com');
+
+    const rows = send(driver).rows;
+    expect(rows).toHaveLength(1);
+    // A named person at the business's own domain, then its role address,
+    // then other non-free mail, then free mail.
+    expect(rows[0]).toMatchObject({
+      name: 'Synergy Business Brokers',
+      email: 'ashish@synergybb.com',
+      email_type: 'personal',
+      other_emails: 'info@synergybb.com, partner@otherfirm.com, bo@gmail.com',
+      email_count: 4,
+    });
+  });
+
+  it('leaves out businesses with no email', () => {
+    const driver = db();
+    addBusiness(driver, 'No Email Yet');
+    expect(send(driver).rows).toEqual([]);
+  });
+
+  it('sends a business once, even after it gains another address', () => {
+    const driver = db();
+    const one = addBusiness(driver, 'Biz One');
+    addEmail(driver, one, 'owner@one.com');
+    const first = send(driver);
+    expect(first.rows).toHaveLength(1);
+
+    addEmail(driver, one, 'sales@one.com'); // a recrawl months later
+    const two = addBusiness(driver, 'Biz Two');
+    addEmail(driver, two, 'hi@two.com');
+    expect(send(driver, first.cursor).rows.map((r) => r['name'])).toEqual(['Biz Two']);
+  });
+
+  it('pages without losing or repeating a business', () => {
+    const driver = db();
+    for (let i = 0; i < 9; i += 1) {
+      const id = addBusiness(driver, `B${i}`);
+      addEmail(driver, id, `a${i}@x${i}.com`);
+      addEmail(driver, id, `b${i}@x${i}.com`);
+    }
+    const names = send(driver, START, 2).rows.map((r) => r['name']);
+    expect(names).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8].map((i) => `B${i}`));
+    expect(countRemaining(driver, LEADS_BY_BUSINESS, START)).toBe(9);
+  });
+
+  it('never offers a junk address, as best or as another', () => {
+    const driver = db();
+    const id = addBusiness(driver, 'Acme');
+    addEmail(driver, id, 'info@youwebsite.com', { junk: true });
+    addEmail(driver, id, 'owner@acme.com');
+    expect(send(driver).rows[0]).toMatchObject({ email: 'owner@acme.com', other_emails: null });
   });
 });

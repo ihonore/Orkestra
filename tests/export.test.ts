@@ -255,6 +255,7 @@ describe('view schemas', () => {
     expect(Object.keys(VIEWS).sort()).toEqual([
       'businesses',
       'emails',
+      'leads-by-business',
       'leads-flat',
       'leads-with-email',
     ]);
@@ -277,14 +278,25 @@ describe('view schemas', () => {
       expect(schema.sql).toMatch(/AS id/i);
       // `leads-with-email` pages on the email link, the same `lastSubId` cursor
       // as leads-flat's email stream, which is what lets the two share a tab.
-      expect(schema.sql).toMatch(schema.entity === 'leads-with-email' ? /:lastSubId/ : /:lastId/);
+      // `leads-by-business` pages on each business's first email link, also
+      // held in `lastSubId`.
+      expect(schema.sql).toMatch(
+        schema.entity === 'leads-with-email' || schema.entity === 'leads-by-business'
+          ? /:lastSubId/
+          : /:lastId/,
+      );
       expect(schema.sql).toContain(':limit');
     }
   });
 
   it('excludes junk emails from every view that joins them', () => {
     // Junk stays in the database for auditing but must never reach an export.
-    for (const schema of [VIEWS['leads-flat'], VIEWS['leads-with-email'], VIEWS['emails']]) {
+    for (const schema of [
+      VIEWS['leads-flat'],
+      VIEWS['leads-with-email'],
+      VIEWS['leads-by-business'],
+      VIEWS['emails'],
+    ]) {
       expect(schema?.sql).toMatch(/is_junk\s*=\s*0/);
     }
   });

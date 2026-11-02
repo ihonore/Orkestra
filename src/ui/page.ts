@@ -798,7 +798,8 @@ function renderAutopilot(withForm) {
     '<div class="opts">' + c('ap-sheets', st.sheets.enabled, 'Send to the sheet') +
       '<label>every</label>' + n('ap-sheets-batch', st.sheets.batchRows, 50, 10000, 90) +
       '<label>leads, or every</label>' + n('ap-sheets-wait', st.sheets.maxWaitMinutes, 10, 1440) +
-      '<label>minutes</label>' + c('ap-sheets-email', st.sheets.onlyWithEmail, 'only leads with an email') + '</div>' +
+      '<label>minutes</label><span class="muted">layout: ' + esc(LAYOUTS[sheets.layout].label.toLowerCase()) +
+      ' (step 7)</span></div>' +
     '<div class="opts"><label>Start nothing new when free memory is below</label>' +
       n('ap-memory', st.minFreeMemoryMb, 256, 65536, 90) + '<label>MB</label></div>' +
     '<div class="opts"><button class="go ghost" id="ap-save">Save settings</button>' +
@@ -815,7 +816,7 @@ function renderAutopilot(withForm) {
     emails: { enabled: $('#ap-emails').checked, workers: Number($('#ap-emails-workers').value),
       minSites: Number($('#ap-emails-min').value) },
     sheets: { enabled: $('#ap-sheets').checked, batchRows: Number($('#ap-sheets-batch').value),
-      maxWaitMinutes: Number($('#ap-sheets-wait').value), onlyWithEmail: $('#ap-sheets-email').checked },
+      maxWaitMinutes: Number($('#ap-sheets-wait').value) },
     minFreeMemoryMb: Number($('#ap-memory').value),
   });
   const send = async (body) => {
@@ -836,7 +837,14 @@ function renderAutopilot(withForm) {
 // Settings and the key are saved by the server into gms.config.local.yaml and
 // ~/gms-credentials. The key's contents never come back to the page; only the
 // address it authenticates as, which is what the sheet must be shared with.
-let sheets = { spreadsheetId: null, sheetName: 'Leads', credentialsFile: null, keyFound: false, clientEmail: null, writable: false };
+let sheets = { spreadsheetId: null, layout: 'business', sheetName: 'Leads by business', credentialsFile: null, keyFound: false, clientEmail: null, writable: false };
+
+/** The sheet layouts, the export each sends, and each one's usual tab. */
+const LAYOUTS = {
+  business: { label: 'One row per business', entity: 'leads-by-business', tab: 'Leads by business' },
+  email: { label: 'One row per email', entity: 'leads-with-email', tab: 'Leads' },
+  all: { label: 'Every lead, with or without email', entity: 'leads-flat', tab: 'Leads' },
+};
 let sheetsCheck = null;
 let sheetsNote = null;
 
@@ -851,10 +859,17 @@ function sheetsBody(busy) {
   const marks = { ok: '<span class="good">&#10003;</span>', warn: '<span class="warn">!</span>', fail: '<span class="bad">&#10007;</span>' };
   return '<div class="opts">' +
     '<label>Sheet</label><input type="text" id="g-sheet" placeholder="paste the sheet’s link" style="width:380px" value="' + esc(url) + '"' + off + '>' +
-    '<label>Tab</label><input type="text" id="g-tab" style="width:110px" value="' + esc(sheets.sheetName) + '"' + off + '>' +
+    '<label>Tab</label><input type="text" id="g-tab" style="width:150px" value="' + esc(sheets.sheetName) + '"' + off + '>' +
     '<button class="go ghost" id="g-save"' + off + '>Save</button>' +
     '<span class="warn" id="g-dirty" hidden>not saved yet</span>' +
     (url ? '<a href="' + esc(url) + '" target="_blank" rel="noopener">open the sheet</a>' : '') +
+    '</div><div class="opts"><label>Layout</label><select id="g-layout"' + off + '>' +
+    Object.entries(LAYOUTS).map(([k, l]) =>
+      '<option value="' + k + '"' + (k === sheets.layout ? ' selected' : '') + '>' + esc(l.label) + '</option>').join('') +
+    '</select><span class="muted">' + esc(sheets.layout === 'business'
+      ? 'best address first, the rest in "other emails"; sent once its website has been checked'
+      : sheets.layout === 'email' ? 'a business with three addresses fills three rows'
+      : 'also businesses with no email yet, which appear again once one is found') + '</span>' +
     '</div><div class="opts"><label>Key file</label>' + key +
     '<label class="chip">' + (sheets.keyFound ? 'Replace key' : 'Choose key file') +
     '<input type="file" id="g-key" accept=".json,application/json" hidden' + off + '></label></div>' +
@@ -881,13 +896,14 @@ function sheetsDirty() {
   const sheet = $('#g-sheet'), tab = $('#g-tab');
   if (!sheet) return false;
   return sheetIdOf(sheet.value) !== (sheets.spreadsheetId || '') ||
-    tab.value.trim() !== sheets.sheetName;
+    tab.value.trim() !== sheets.sheetName || $('#g-layout').value !== sheets.layout;
 }
 
 /** Save the Sheet and Tab boxes. Returns false, with the reason shown, on failure. */
 async function saveSheets() {
   const r = await sheetsPost('/api/sheets/settings',
-    JSON.stringify({ spreadsheet: $('#g-sheet').value, sheetName: $('#g-tab').value }), 'application/json');
+    JSON.stringify({ spreadsheet: $('#g-sheet').value, sheetName: $('#g-tab').value,
+      layout: $('#g-layout').value }), 'application/json');
   if (!r) return false;
   sheets = r;
   sheetsNote = { tone: r.warning ? 'bad' : 'ok', text: r.warning || 'Saved. The next export uses it.' };
@@ -1083,6 +1099,15 @@ function wireControls() {
   if (sheetInput) {
     sheetInput.addEventListener('input', markDirty);
     tabInput.addEventListener('input', markDirty);
+    // Each layout has its own columns, so its own tab: suggest that tab when
+    // the layout changes, unless someone has typed a name of their own.
+    $('#g-layout').addEventListener('change', () => {
+      const usual = Object.values(LAYOUTS).map((l) => l.tab);
+      if (tabInput.value.trim() === '' || usual.includes(tabInput.value.trim())) {
+        tabInput.value = LAYOUTS[$('#g-layout').value].tab;
+      }
+      markDirty();
+    });
     markDirty();
   }
   on('#g-save', async () => {
@@ -1111,10 +1136,9 @@ function wireControls() {
   });
   on('#do-sheets', async () => {
     if (sheetsDirty() && !(await saveSheets())) return;
-    // The same rows autopilot would send, so a manual send and an automatic
-    // one never disagree about what belongs in the sheet.
-    startTask('export-sheets', {
-      entity: auto.settings && auto.settings.sheets.onlyWithEmail === false ? 'leads-flat' : 'leads-with-email' });
+    // The layout's own export — the same one autopilot sends — so a manual
+    // send and an automatic one never disagree about what belongs in the sheet.
+    startTask('export-sheets', { entity: LAYOUTS[sheets.layout].entity });
   });
 }
 

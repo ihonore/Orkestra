@@ -45,8 +45,6 @@ export interface AutopilotSettings {
     readonly batchRows: number;
     /** ...or once the oldest unsent row has waited this long. */
     readonly maxWaitMinutes: number;
-    /** Send only leads that have an email. */
-    readonly onlyWithEmail: boolean;
   };
   /** Start nothing new while free memory is below this. */
   readonly minFreeMemoryMb: number;
@@ -63,7 +61,7 @@ export const DEFAULT_AUTOPILOT: AutopilotSettings = {
   enabled: false,
   scrape: { enabled: true, workers: 4 },
   emails: { enabled: true, workers: 8, minSites: 25 },
-  sheets: { enabled: true, batchRows: 500, maxWaitMinutes: 120, onlyWithEmail: true },
+  sheets: { enabled: true, batchRows: 500, maxWaitMinutes: 120 },
   minFreeMemoryMb: 1024,
 };
 
@@ -109,7 +107,6 @@ export function normalizeAutopilot(input: unknown): AutopilotSettings {
       // above 10,000 it stops being a batch.
       batchRows: clamp(sheets['batchRows'], 50, 10_000, d.sheets.batchRows),
       maxWaitMinutes: clamp(sheets['maxWaitMinutes'], 10, 1_440, d.sheets.maxWaitMinutes),
-      onlyWithEmail: flag(sheets['onlyWithEmail'], d.sheets.onlyWithEmail),
     },
     minFreeMemoryMb: clamp(raw['minFreeMemoryMb'], 256, 65_536, d.minFreeMemoryMb),
   };
@@ -123,6 +120,11 @@ export interface Snapshot {
   readonly sitesQueued: number;
   /** Rows the sheet export would send; null when Sheets is not set up. */
   readonly rowsUnsent: number | null;
+  /**
+   * What to send, from the sheet's layout setting (step 7): one view, so a
+   * manual send and an automatic one always agree.
+   */
+  readonly sheetEntity: string;
   /** When the sheet last received rows, if ever. */
   readonly lastSentAt: number | null;
 }
@@ -233,11 +235,16 @@ export function decide(input: DecideInput): Decision {
   let sheets = gate('sheets', settings.sheets.enabled);
   if (sheets === null) {
     const unsent = snapshot.rowsUnsent;
-    const kind = settings.sheets.onlyWithEmail ? 'leads with an email' : 'rows';
+    const kind =
+      snapshot.sheetEntity === 'leads-by-business'
+        ? 'businesses with an email'
+        : snapshot.sheetEntity === 'leads-with-email'
+          ? 'leads with an email'
+          : 'rows';
     if (unsent === null) {
       sheets = { state: 'blocked', detail: 'not set up: add the sheet and key in step 7' };
     } else if (unsent === 0) {
-      sheets = { state: 'idle', detail: `the sheet has every ${kind.replace(/s$/, '')}` };
+      sheets = { state: 'idle', detail: 'the sheet is up to date' };
     } else {
       const since = snapshot.lastSentAt ?? input.enabledAt;
       const due = since + settings.sheets.maxWaitMinutes * 60_000;
@@ -247,12 +254,7 @@ export function decide(input: DecideInput): Decision {
         snapshot.searchesQueued === 0 &&
         snapshot.sitesQueued === 0;
       if (unsent >= settings.sheets.batchRows || now >= due || pipelineDone) {
-        start.push({
-          stage: 'sheets',
-          input: {
-            entity: settings.sheets.onlyWithEmail ? 'leads-with-email' : 'leads-flat',
-          },
-        });
+        start.push({ stage: 'sheets', input: { entity: snapshot.sheetEntity } });
         sheets = { state: 'running', detail: `sending ${unsent.toLocaleString()} ${kind}` };
       } else {
         sheets = {

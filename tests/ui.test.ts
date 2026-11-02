@@ -600,6 +600,34 @@ describe('google sheets settings', () => {
     expect(fs.readFileSync(path.join(root, 'gms.config.local.yaml'), 'utf8')).toContain(ID);
   });
 
+  it('defaults to one row per business, in its own tab', async () => {
+    const { url } = await serve({ allowConfigWrite: true, allowControl: true });
+    expect(await settings(url)).toMatchObject({
+      layout: 'business',
+      sheetName: 'Leads by business',
+    });
+  });
+
+  it("saves each layout's tab to its own setting", async () => {
+    const { url, root } = await serve({ allowConfigWrite: true, allowControl: true });
+    await post(
+      url,
+      '/api/sheets/settings',
+      JSON.stringify({ spreadsheet: ID, layout: 'email', sheetName: 'Leads' }),
+    );
+    expect(await settings(url)).toMatchObject({ layout: 'email', sheetName: 'Leads' });
+    await post(
+      url,
+      '/api/sheets/settings',
+      JSON.stringify({ spreadsheet: ID, layout: 'business', sheetName: 'By business' }),
+    );
+    expect(await settings(url)).toMatchObject({ layout: 'business', sheetName: 'By business' });
+    // The per-email tab was not overwritten by the by-business one.
+    const local = fs.readFileSync(path.join(root, 'gms.config.local.yaml'), 'utf8');
+    expect(local).toContain('sheetName: Leads');
+    expect(local).toContain('businessSheetName: By business');
+  });
+
   it('refuses something that is not a sheet', async () => {
     const { url } = await serve({ allowConfigWrite: true, allowControl: true });
     const response = await post(

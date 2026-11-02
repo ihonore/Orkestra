@@ -262,6 +262,18 @@ export const ExportersSchema = z
         spreadsheetId: z.string().min(1).optional(),
         sheetName: z.string().min(1).default('Leads'),
         /**
+         * How the sheet lists leads. `business`: one row per business with an
+         * email, its best address first and the rest in one cell. `email`: one
+         * row per address. `all`: one row per address plus businesses with none.
+         */
+        layout: z.enum(['business', 'email', 'all']).default('business'),
+        /**
+         * The tab for the `business` layout. Separate from `sheetName` because
+         * its columns differ: appending one layout under the other's header
+         * would scramble both.
+         */
+        businessSheetName: z.string().min(1).default('Leads by business'),
+        /**
          * Path to a service-account JSON key.
          *
          * Leave unset to use Application Default Credentials, which is the

@@ -156,6 +156,130 @@ export const LEADS_WITH_EMAIL_VIEW: RecordSchema = {
   sql: LEADS_WITH_EMAIL,
 };
 
+/**
+ * One row per business that has an email: its best address in `email`, the
+ * rest in `other_emails`. What the team's sheet uses by default — a business
+ * with five addresses used to fill five rows.
+ *
+ * "Best" is the address most likely to reach someone who can buy: a named
+ * person at the business's own domain, then a role address there (info@,
+ * contact@), then anything else that is not free mail, then free mail
+ * (gmail.com), and within each, the extractor's confidence.
+ *
+ * ## Why it can be sent once, and complete
+ *
+ * The cursor is the business's **first** email link. Link rowids only grow,
+ * and every address a crawl finds is linked in one transaction — so a business
+ * appears with all of its addresses at once, its first link never changes, and
+ * "first link > cursor" is exactly "not sent yet". A business that later gains
+ * an address (a recrawl after 90 days) is not sent again; the database and the
+ * per-email exports have it. The one way to send a business with only some of
+ * its addresses is a crawl stopped mid-way, which commits what it found so far.
+ */
+const LEADS_BY_BUSINESS_SQL = `
+    WITH links AS (
+      SELECT be.rowid AS link_id, be.business_id, be.confidence,
+             e.address, e.is_role, e.is_free, e.email_domain
+        FROM business_emails be
+        JOIN emails e ON e.id = be.email_id
+       WHERE e.is_junk = 0
+    ),
+    ranked AS (
+      SELECT l.*,
+             ROW_NUMBER() OVER (
+               PARTITION BY l.business_id
+               ORDER BY (l.email_domain = d.domain AND l.is_role = 0 AND l.is_free = 0) DESC,
+                        (l.email_domain = d.domain) DESC,
+                        l.is_free ASC,
+                        l.is_role ASC,
+                        l.confidence DESC,
+                        l.link_id ASC
+             ) AS rank,
+             MIN(l.link_id) OVER (PARTITION BY l.business_id) AS first_link,
+             COUNT(*) OVER (PARTITION BY l.business_id) AS email_count
+        FROM links l
+        JOIN businesses b ON b.id = l.business_id
+        LEFT JOIN domains d ON d.id = b.domain_id
+    ),
+    best AS (
+      SELECT * FROM ranked WHERE rank = 1 AND first_link > :lastSubId
+    )
+    SELECT
+      b.id                                   AS id,
+      best.first_link                        AS sub_id,
+      b.id                                   AS business_id,
+      b.name                                 AS name,
+      b.category_primary                     AS category,
+      b.phone_e164                           AS phone,
+      best.address                           AS email,
+      CASE WHEN best.is_role = 1 THEN 'role'
+           WHEN best.is_free = 1 THEN 'free'
+           ELSE 'personal' END               AS email_type,
+      (SELECT GROUP_CONCAT(address, ', ')
+         FROM (SELECT r.address FROM ranked r
+                WHERE r.business_id = b.id AND r.rank > 1
+                ORDER BY r.rank))            AS other_emails,
+      best.email_count                       AS email_count,
+      b.website_url                          AS website,
+      d.domain                               AS domain,
+      b.street                               AS street,
+      b.city                                 AS city,
+      b.state_code                           AS state,
+      b.postal_code                          AS zip,
+      b.rating                               AS rating,
+      b.reviews_count                        AS reviews,
+      seed_city.city                         AS searched_city,
+      seed_cat.name                          AS searched_category,
+      b.gmaps_url                            AS gmaps_url,
+      b.cid                                  AS cid,
+      b.first_seen_at                        AS first_seen
+    FROM best
+    JOIN businesses b ON b.id = best.business_id
+    LEFT JOIN domains d ON d.id = b.domain_id
+    LEFT JOIN business_sightings s ON s.id = (
+      SELECT id FROM business_sightings WHERE business_id = b.id ORDER BY id LIMIT 1
+    )
+    LEFT JOIN cities seed_city ON seed_city.id = s.seed_city_id
+    LEFT JOIN categories seed_cat ON seed_cat.id = s.seed_category_id
+    ORDER BY best.first_link
+    LIMIT :limit`;
+
+export const LEADS_BY_BUSINESS: RecordSchema = {
+  entity: 'leads-by-business',
+  fields: [
+    { name: 'business_id', kind: 'number' },
+    { name: 'name', kind: 'text' },
+    { name: 'category', kind: 'text' },
+    { name: 'phone', kind: 'digits', description: 'E.164' },
+    { name: 'email', kind: 'text', description: 'the best address' },
+    { name: 'email_type', kind: 'text', description: 'personal | role | free' },
+    { name: 'other_emails', kind: 'text', description: 'the rest, best first' },
+    { name: 'email_count', kind: 'number' },
+    { name: 'website', kind: 'text' },
+    { name: 'domain', kind: 'text' },
+    { name: 'street', kind: 'text' },
+    { name: 'city', kind: 'text' },
+    { name: 'state', kind: 'text' },
+    { name: 'zip', kind: 'digits' },
+    { name: 'rating', kind: 'number' },
+    { name: 'reviews', kind: 'number' },
+    { name: 'searched_city', kind: 'text' },
+    { name: 'searched_category', kind: 'text' },
+    { name: 'gmaps_url', kind: 'text' },
+    { name: 'cid', kind: 'digits', description: '64-bit; never a number' },
+    { name: 'first_seen', kind: 'timestamp' },
+  ],
+  sql: LEADS_BY_BUSINESS_SQL,
+};
+
+/** How the team's sheet lists leads, and the view each layout sends. */
+export type SheetLayout = 'business' | 'email' | 'all';
+export const SHEET_LAYOUT_ENTITY: Record<SheetLayout, string> = {
+  business: 'leads-by-business',
+  email: 'leads-with-email',
+  all: 'leads-flat',
+};
+
 export const BUSINESSES: RecordSchema = {
   entity: 'businesses',
   fields: [
@@ -227,6 +351,7 @@ export const EMAILS: RecordSchema = {
 export const VIEWS: Record<string, RecordSchema> = {
   'leads-flat': LEADS_FLAT,
   'leads-with-email': LEADS_WITH_EMAIL_VIEW,
+  'leads-by-business': LEADS_BY_BUSINESS,
   businesses: BUSINESSES,
   emails: EMAILS,
 };
@@ -315,10 +440,13 @@ export function readPage(
   if (schema.entity === LEADS_FLAT.entity) return readLeadPage(driver, cursor, limit);
   // Its cursor is the email link, which lives in `lastSubId` exactly as it does
   // for leads-flat's email stream — so one can continue from the other.
-  if (schema.entity === LEADS_WITH_EMAIL_VIEW.entity) {
-    const rows = driver
-      .prepare<LeadRow>(LEADS_WITH_EMAIL)
-      .all({ lastSubId: cursor.lastSubId, limit });
+  // Both page on `sub_id` held in `lastSubId`: the email link for one, the
+  // business's first email link for the other.
+  if (
+    schema.entity === LEADS_WITH_EMAIL_VIEW.entity ||
+    schema.entity === LEADS_BY_BUSINESS.entity
+  ) {
+    const rows = driver.prepare<LeadRow>(schema.sql).all({ lastSubId: cursor.lastSubId, limit });
     return {
       rows,
       next: { lastId: cursor.lastId, lastSubId: rows.at(-1)?.sub_id ?? cursor.lastSubId },
@@ -361,8 +489,11 @@ export function countRemaining(
       countOf(driver, LEADS_NO_EMAIL, { lastId: cursor.lastId })
     );
   }
-  if (schema.entity === LEADS_WITH_EMAIL_VIEW.entity) {
-    return countOf(driver, LEADS_WITH_EMAIL, { lastSubId: cursor.lastSubId });
+  if (
+    schema.entity === LEADS_WITH_EMAIL_VIEW.entity ||
+    schema.entity === LEADS_BY_BUSINESS.entity
+  ) {
+    return countOf(driver, schema.sql, { lastSubId: cursor.lastSubId });
   }
   return countOf(driver, schema.sql, { lastId: cursor.lastId });
 }

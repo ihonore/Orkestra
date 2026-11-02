@@ -20,6 +20,7 @@ import {
   readPage,
   type ExportCursor,
   type ExportRow,
+  SHEET_LAYOUT_ENTITY,
   sharedLeadEntity,
   startingCursor,
 } from '../../views/index.js';
@@ -197,7 +198,9 @@ export interface ExportSheetsOptions {
  * window onto the database, and the database stays the source of truth.
  */
 export async function runExportSheets(options: ExportSheetsOptions): Promise<void> {
-  const entity = options.entity ?? 'leads-flat';
+  const settings = options.config.exporters.sheets;
+  // Without --entity, the layout chosen for the team's sheet decides.
+  const entity = options.entity ?? SHEET_LAYOUT_ENTITY[settings.layout];
   const schema = VIEWS[entity];
   if (schema === undefined) {
     throw new AppError(`Unknown entity: ${entity}`, {
@@ -206,7 +209,6 @@ export async function runExportSheets(options: ExportSheetsOptions): Promise<voi
     });
   }
 
-  const settings = options.config.exporters.sheets;
   const spreadsheetId = options.spreadsheetId ?? settings.spreadsheetId;
   if (spreadsheetId === undefined || spreadsheetId.trim() === '') {
     throw new AppError('No spreadsheet configured.', {
@@ -217,7 +219,10 @@ export async function runExportSheets(options: ExportSheetsOptions): Promise<voi
     });
   }
 
-  const sheetName = options.sheetName ?? settings.sheetName;
+  // The by-business layout has its own columns, so its own tab.
+  const sheetName =
+    options.sheetName ??
+    (entity === 'leads-by-business' ? settings.businessSheetName : settings.sheetName);
   const driver = openDatabaseFromConfig(options.config);
   const cursors = new ExportsRepository(driver);
 

@@ -23,7 +23,14 @@ const ON = { ...DEFAULT_AUTOPILOT, enabled: true };
 function input(snapshot: Partial<Snapshot>, extra: Partial<DecideInput> = {}): DecideInput {
   return {
     settings: ON,
-    snapshot: { searchesQueued: 0, sitesQueued: 0, rowsUnsent: 0, lastSentAt: null, ...snapshot },
+    snapshot: {
+      searchesQueued: 0,
+      sitesQueued: 0,
+      rowsUnsent: 0,
+      lastSentAt: null,
+      sheetEntity: 'leads-by-business',
+      ...snapshot,
+    },
     running: new Set<TaskName>(),
     history: FRESH_HISTORY,
     now: NOW,
@@ -66,7 +73,7 @@ describe('autopilot decisions', () => {
     const d = decide(
       input({ searchesQueued: 9, sitesQueued: 9, rowsUnsent: 500 }, { running: busy }),
     );
-    expect(d.start).toEqual([{ stage: 'sheets', input: { entity: 'leads-with-email' } }]);
+    expect(d.start).toEqual([{ stage: 'sheets', input: { entity: 'leads-by-business' } }]);
   });
 
   it('holds a part batch, and says when it will go at the latest', () => {
@@ -78,7 +85,9 @@ describe('autopilot decisions', () => {
       ),
     );
     expect(d.start).toEqual([]);
-    expect(d.status.sheets.detail).toMatch(/120 of 500 leads with an email ready · sending by/);
+    expect(d.status.sheets.detail).toMatch(
+      /120 of 500 businesses with an email ready · sending by/,
+    );
   });
 
   it('sends a part batch once it has waited long enough', () => {
@@ -96,9 +105,8 @@ describe('autopilot decisions', () => {
     expect(started(decide(input({ rowsUnsent: 7, lastSentAt: NOW })))).toEqual(['sheets']);
   });
 
-  it('can send every lead instead, not only those with an email', () => {
-    const settings = normalizeAutopilot({ ...ON, sheets: { onlyWithEmail: false } });
-    const d = decide(input({ rowsUnsent: 600 }, { settings }));
+  it('sends whichever export the sheet layout names', () => {
+    const d = decide(input({ rowsUnsent: 600, sheetEntity: 'leads-flat' }));
     expect(d.start).toContainEqual({ stage: 'sheets', input: { entity: 'leads-flat' } });
   });
 
@@ -161,7 +169,7 @@ describe('autopilot settings', () => {
       enabled: false,
       scrape: { workers: 4 },
       emails: { workers: 8, minSites: 25 },
-      sheets: { batchRows: 500, maxWaitMinutes: 120, onlyWithEmail: true },
+      sheets: { batchRows: 500, maxWaitMinutes: 120 },
       minFreeMemoryMb: 1024,
     });
   });
@@ -201,6 +209,7 @@ describe('the autopilot controller', () => {
         sitesQueued: 0,
         rowsUnsent: 0,
         lastSentAt: null,
+        sheetEntity: 'leads-by-business',
         ...snapshot,
       }),
       tasks: {
