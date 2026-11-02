@@ -23,7 +23,13 @@
  */
 import type { Logger } from '../logging/logger.js';
 
-export type ShutdownReason = 'SIGINT' | 'SIGTERM' | 'SIGHUP' | 'SIGBREAK' | 'manual';
+export type ShutdownReason = 'SIGINT' | 'SIGTERM' | 'SIGHUP' | 'SIGBREAK' | 'parent' | 'manual';
+
+/** What a parent process sends over IPC to ask for a graceful stop. */
+export const STOP_MESSAGE = 'gms:stop';
+
+/** Controllers currently installed in this process, for {@link listenForParentStop}. */
+const installed = new Set<ShutdownController>();
 
 export interface ShutdownOptions {
   /** How long in-flight work may take to finish before it is abandoned. */
@@ -72,6 +78,7 @@ export class ShutdownController {
    * Node accepts the name and the signal simply never arrives.
    */
   install(): void {
+    installed.add(this);
     const signals: NodeJS.Signals[] = ['SIGINT', 'SIGTERM', 'SIGHUP', 'SIGBREAK'];
     for (const sig of signals) {
       const handler = (): void => {
@@ -88,6 +95,7 @@ export class ShutdownController {
 
   /** Remove handlers, so a long-lived process (or a test) is not left leaking them. */
   uninstall(): void {
+    installed.delete(this);
     for (const { signal, handler } of this.#handlers) process.off(signal, handler);
     this.#handlers.length = 0;
   }
@@ -271,4 +279,49 @@ function isAlive(pid: number): boolean {
   } catch {
     return false;
   }
+}
+
+/**
+ * Accept a stop request from the process that spawned this one.
+ *
+ * The dashboard runs commands as child processes and used to stop them with
+ * SIGTERM. Windows has no SIGTERM: Node implements `child.kill()` there as
+ * TerminateProcess, which runs no handler at all — so on the VPS every Stop
+ * click killed a scrape outright, left its leases held until they expired, and
+ * orphaned Chromium. A message over the IPC channel works the same everywhere,
+ * and lands in the same graceful path as Ctrl-C.
+ *
+ * The parent disappearing (closed window, crash) counts as a stop request
+ * too: a scrape with no dashboard supervising it is not what anyone started.
+ *
+ * A process with no {@link ShutdownController} installed (an import, a plan)
+ * has no cleanup to run, so it simply exits, as it would on SIGTERM.
+ *
+ * Does nothing unless the process was spawned with an IPC channel.
+ */
+export function listenForParentStop(
+  exit: (code: number) => void = process.exit.bind(process),
+): void {
+  if (typeof process.send !== 'function') return;
+
+  const stop = (): void => {
+    if (installed.size === 0) {
+      exit(130);
+      return;
+    }
+    // A controller already shutting down must not be asked again: a second
+    // request escalates to an immediate exit, which is exactly what the
+    // parent's own exit (a disconnect right after the stop message) would do.
+    for (const controller of installed) {
+      if (!controller.isShuttingDown) void controller.shutdown('parent');
+    }
+  };
+
+  process.on('message', (message) => {
+    if (message === STOP_MESSAGE) stop();
+  });
+  process.on('disconnect', stop);
+  // Listening keeps the channel referenced, which would hold the event loop
+  // open and stop a finished command from ever exiting.
+  process.channel?.unref();
 }

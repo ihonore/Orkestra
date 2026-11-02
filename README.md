@@ -81,6 +81,10 @@ from the project directory — e.g. `npm run gms -- ui --control`.
 
 ## Moving to another machine
 
+**Windows VPS:** copy `scripts/windows/install.cmd` onto it and double-click.
+It installs everything, and updates on later runs. See
+**[docs/WINDOWS.md](docs/WINDOWS.md)**.
+
 Git carries the code and the `seeds/` lists. It does **not** carry `data/`
 (the database, with every lead and every finished search) or `assests/`.
 Both are git-ignored, so a fresh clone on the VPS starts with the full city and

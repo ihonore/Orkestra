@@ -13,6 +13,7 @@ import { Command, InvalidArgumentError, Option } from 'commander';
 import { loadConfig } from '../config/loader.js';
 import type { LogLevel, ResolvedConfig } from '../config/schema.js';
 import { errorMessage, isAppError } from '../core/errors/taxonomy.js';
+import { listenForParentStop } from '../core/engine/shutdown.js';
 import { APP_VERSION } from '../version.js';
 import { runConfigShow } from './commands/config.js';
 import { runDbBackup, runDbCheck, runDbMigrate, runDbStatus, runDbVacuum } from './commands/db.js';
@@ -579,6 +580,9 @@ export function buildProgram(): Command {
 }
 
 async function main(): Promise<void> {
+  // Started by the dashboard: let it ask for a graceful stop over IPC, which
+  // works on Windows where SIGTERM cannot.
+  listenForParentStop();
   const program = buildProgram();
   try {
     await program.parseAsync(process.argv);

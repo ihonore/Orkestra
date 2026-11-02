@@ -523,6 +523,11 @@ A local web page showing progress, leads, failures and exports — and, with
   `http://127.0.0.1:4600` locally.
 - Reads open the database read-only and close immediately, so leaving it open for
   days won't block a running scrape.
+- **Stop** asks the process to stop over an IPC channel rather than with a
+  signal, because Windows has no SIGTERM: `kill()` there terminates outright,
+  skipping the handler that finishes in-flight searches and closes the browser.
+  A task still running `runtime.shutdownGraceSeconds` + 30 s later is killed.
+  Closing the dashboard, or losing it, stops its tasks the same way.
 - Buttons launch real `gms` commands as separate processes from a fixed
   allow-list with typed parameters — never a free-text command line — so a crash
   in the scraper can't take the dashboard down.

@@ -369,6 +369,9 @@ export function startUiServer(options: UiServerOptions): Promise<RunningServer> 
       ? new TaskManager({
           cliEntry: cliEntryPoint(),
           cwd: config.paths.root,
+          // The child gets the configured grace to finish its jobs; allow that
+          // plus time to close the browser before resorting to a kill.
+          stopTimeoutMs: (config.runtime.shutdownGraceSeconds + 30) * 1000,
           ...(options.configFile !== undefined && { configFile: options.configFile }),
         })
       : null;

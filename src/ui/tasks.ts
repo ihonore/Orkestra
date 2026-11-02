@@ -18,7 +18,8 @@ import { spawn, type ChildProcess } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+import { STOP_MESSAGE } from '../core/engine/shutdown.js';
 
 export type TaskName =
   'run' | 'enrich' | 'export' | 'export-sheets' | 'import-cities' | 'import-categories' | 'plan';
@@ -56,12 +57,18 @@ const MAX_LINES = 500;
 export class TaskManager {
   readonly #tasks = new Map<string, Task>();
   readonly #children = new Map<string, ChildProcess>();
+  readonly #killTimers = new Map<string, NodeJS.Timeout>();
 
   constructor(
     private readonly options: {
       readonly cliEntry: string;
       readonly cwd: string;
       readonly configFile?: string;
+      /**
+       * How long a stopped task may take to exit before it is killed. Should
+       * exceed the child's own shutdown grace, or a clean stop gets cut short.
+       */
+      readonly stopTimeoutMs?: number;
     },
   ) {}
 
@@ -114,7 +121,8 @@ export class TaskManager {
         GMS_LOGGING__PRETTY: 'false',
         NO_COLOR: '1',
       },
-      stdio: ['ignore', 'pipe', 'pipe'],
+      // The IPC channel is how a stop is requested; see stop().
+      stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
     });
     this.#children.set(id, child);
 
@@ -133,7 +141,7 @@ export class TaskManager {
       task.lines.push(`failed to start: ${error.message}`);
       task.state = 'failed';
       task.finishedAt = Date.now();
-      this.#children.delete(id);
+      this.#forget(id);
     });
 
     child.on('close', (code, signal) => {
@@ -146,7 +154,7 @@ export class TaskManager {
           : code === 0
             ? 'succeeded'
             : 'failed';
-      this.#children.delete(id);
+      this.#forget(id);
     });
 
     return { ok: true, task };
@@ -155,19 +163,38 @@ export class TaskManager {
   /**
    * Ask a task to stop.
    *
-   * SIGTERM, not SIGKILL: the engine installs a handler that finishes in-flight
-   * jobs, checkpoints them, and closes the browser. Killing outright would
-   * orphan Chromium and leave leases held until the reaper expires them.
+   * By message over the IPC channel, not by signal. The child's handler
+   * finishes in-flight jobs, checkpoints them and closes the browser; killing
+   * outright would orphan Chromium and leave leases held until the reaper
+   * expires them. A signal used to do this, but on Windows `kill()` is
+   * TerminateProcess whatever signal is named, so the graceful path never ran.
+   *
+   * Only if the child is still alive after `stopTimeoutMs` is it killed.
    */
   stop(id: string): boolean {
     const child = this.#children.get(id);
     const task = this.#tasks.get(id);
-    if (child === undefined || task === undefined) return false;
+    if (child === undefined || task === undefined || task.state === 'stopped') return false;
 
     task.state = 'stopped';
     task.lines.push('— stopping: finishing in-flight work —');
-    child.kill('SIGTERM');
+    if (child.connected) child.send(STOP_MESSAGE);
+    else child.kill('SIGTERM');
+
+    const timer = setTimeout(() => {
+      task.lines.push('— did not stop in time: killed —');
+      child.kill('SIGKILL');
+    }, this.options.stopTimeoutMs ?? 60_000);
+    // A pending kill must not keep the dashboard process alive on its own.
+    timer.unref();
+    this.#killTimers.set(id, timer);
     return true;
+  }
+
+  #forget(id: string): void {
+    this.#children.delete(id);
+    clearTimeout(this.#killTimers.get(id));
+    this.#killTimers.delete(id);
   }
 
   /** Stop everything. Called when the dashboard itself shuts down. */
@@ -188,21 +215,25 @@ export class TaskManager {
 function runtimeArgsFor(entry: string): string[] {
   if (!entry.endsWith('.ts')) return [];
 
-  // src/ui/tasks.ts -> ../../node_modules/tsx/dist/cli.mjs
+  // tsx's loader, registered with --import, rather than its CLI: the CLI runs
+  // the script in a *second* process, which the IPC channel does not reach, so
+  // a stop request would never arrive. One process, one channel.
+  // src/ui/tasks.ts -> ../../node_modules/tsx/dist/loader.mjs
   const here = fileURLToPath(import.meta.url);
-  const tsx = path.resolve(
+  const loader = path.resolve(
     path.dirname(here),
     '..',
     '..',
     'node_modules',
     'tsx',
     'dist',
-    'cli.mjs',
+    'loader.mjs',
   );
-  if (!fs.existsSync(tsx)) {
-    throw new Error(`cannot run a TypeScript entry without tsx (looked in ${tsx})`);
+  if (!fs.existsSync(loader)) {
+    throw new Error(`cannot run a TypeScript entry without tsx (looked in ${loader})`);
   }
-  return [tsx];
+  // A file URL, because --import takes a specifier and a Windows path is not one.
+  return ['--import', pathToFileURL(loader).href];
 }
 
 /**

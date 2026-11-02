@@ -1,0 +1,4 @@
+# Windows batch files must keep CRLF line endings. cmd.exe misparses LF-only
+# files in ways that depend on where a 512-byte buffer boundary falls.
+*.cmd text eol=crlf
+*.ps1 text eol=crlf

@@ -14,6 +14,7 @@ import { openDatabase } from '../src/db/client.js';
 import { migrate } from '../src/db/migrate.js';
 import { startUiServer, type RunningServer } from '../src/ui/server.js';
 import { PAGE } from '../src/ui/page.js';
+import { TaskManager, cliEntryPoint } from '../src/ui/tasks.js';
 import { cleanupTempDirs, tempDir, writeFile } from './helpers.js';
 
 const running: RunningServer[] = [];
@@ -520,4 +521,45 @@ describe('requests from other websites', () => {
     const response = await fetch(`${url}/api/sheets?file=${encodeURIComponent('/etc/hosts')}`);
     expect(response.status).toBe(400);
   });
+});
+
+describe('stopping a task', () => {
+  // Windows has no SIGTERM: kill() there is TerminateProcess, which runs no
+  // handler. The stop request therefore travels over IPC, and has to land in the
+  // child's graceful shutdown rather than end it abruptly.
+  it('stops a long-running command gracefully, not by killing it', async () => {
+    const root = tempDir();
+    writeFile(root, 'gms.config.yaml', 'project:\n  name: test\n');
+    const tasks = new TaskManager({ cliEntry: cliEntryPoint(), cwd: root, stopTimeoutMs: 30_000 });
+
+    // `gms ui` installs a shutdown controller and then waits forever: the
+    // simplest real command that can only end by being asked to.
+    const started = tasks.start({
+      name: 'run',
+      label: 'wait',
+      // The CLI refuses port 0, so pick an unlikely-to-be-taken one.
+      args: ['ui', '--no-open', '--port', String(41_000 + Math.floor(Math.random() * 20_000))],
+    });
+    if (!started.ok) throw new Error(started.error);
+    const task = started.task;
+
+    const until = async (done: () => boolean, ms: number): Promise<void> => {
+      const deadline = Date.now() + ms;
+      while (!done()) {
+        if (Date.now() > deadline) throw new Error(`timed out; output:\n${task.lines.join('\n')}`);
+        await new Promise((r) => setTimeout(r, 50));
+      }
+    };
+    await until(() => task.lines.some((l) => l.includes('listening')), 20_000);
+
+    const stoppedAt = Date.now();
+    expect(tasks.stop(task.id)).toBe(true);
+    await until(() => task.finishedAt !== null, 25_000);
+
+    expect(task.state).toBe('stopped');
+    // A clean exit, long before the kill fallback would have fired.
+    expect(task.exitCode).toBe(0);
+    expect(Date.now() - stoppedAt).toBeLessThan(15_000);
+    expect(task.lines.join('\n')).not.toContain('killed');
+  }, 60_000);
 });
