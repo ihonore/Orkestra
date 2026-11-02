@@ -16,6 +16,19 @@ import path from 'node:path';
 import YAML from 'yaml';
 import type { ResolvedConfig } from '../config/schema.js';
 import { ConfigSchema } from '../config/schema.js';
+import { loadConfig, mergeDeep } from '../config/loader.js';
+import { checkSheets } from '../exporters/sheets-check.js';
+import { resolvePath } from '../core/util/paths.js';
+import {
+  KeyFileError,
+  defaultCredentialsDir,
+  keyEmail,
+  parseServiceAccountKey,
+  parseSheetName,
+  parseSpreadsheetId,
+  portablePath,
+  saveServiceAccountKey,
+} from './sheets.js';
 import { openDatabaseFromConfig } from '../db/client.js';
 import { JobsRepository } from '../db/repositories/jobs.js';
 import type { SeedKind } from '../db/repositories/seed-jobs.js';
@@ -51,7 +64,16 @@ export interface UiServerOptions {
   readonly configFile?: string;
   /** Where "Save to seeds/" writes. Defaults to the project's own seeds/ folder. */
   readonly seedsDir?: string;
+  /** Where an uploaded Sheets key is stored. Defaults to ~/gms-credentials. */
+  readonly credentialsDir?: string;
 }
+
+/** Config paths the Sheets step may write, and nothing else. */
+const SHEETS_KEYS = new Set([
+  'exporters.sheets.spreadsheetId',
+  'exporters.sheets.sheetName',
+  'exporters.sheets.credentialsFile',
+]);
 
 /**
  * Commands the dashboard may start, and how its form fields map to flags.
@@ -238,8 +260,8 @@ function json(res: http.ServerResponse, status: number, body: unknown): void {
 function writeLocalConfig(
   config: ResolvedConfig,
   updates: Record<string, unknown>,
+  allowed: ReadonlySet<string> = new Set(EDITABLE.map((f) => f.path)),
 ): { ok: true } | { ok: false; error: string } {
-  const allowed = new Set(EDITABLE.map((f) => f.path));
   for (const key of Object.keys(updates)) {
     if (!allowed.has(key)) return { ok: false, error: `not editable: ${key}` };
   }
@@ -253,14 +275,14 @@ function writeLocalConfig(
 
   // Validate the merged result, not just the patch: a value that is fine alone
   // can still violate a cross-field rule such as adaptiveConcurrency.min <= max.
-  const merged = ConfigSchema.safeParse({
-    ...(YAML.parse(
-      fs.existsSync(path.join(config.paths.root, 'gms.config.yaml'))
-        ? fs.readFileSync(path.join(config.paths.root, 'gms.config.yaml'), 'utf8')
-        : '{}',
-    ) as Record<string, unknown>),
-    ...existing,
-  });
+  // Merged deeply, as the loader does. A shallow spread let a local
+  // `exporters.sheets` with one key replace the base file's whole `exporters`
+  // block, so the check ran against a config that never exists.
+  const baseFile = path.join(config.paths.root, 'gms.config.yaml');
+  const base = fs.existsSync(baseFile)
+    ? ((YAML.parse(fs.readFileSync(baseFile, 'utf8')) as Record<string, unknown> | null) ?? {})
+    : {};
+  const merged = ConfigSchema.safeParse(mergeDeep(base, existing));
 
   if (!merged.success) {
     const first = merged.error.issues[0];
@@ -341,6 +363,23 @@ function applySeedEdit(driver: ReturnType<typeof openDatabaseFromConfig>, body: 
 export interface RunningServer {
   readonly url: string;
   close(): Promise<void>;
+}
+
+/** Read a request body as text, refusing anything over `limit` bytes. */
+function readText(
+  req: http.IncomingMessage,
+  limit: number,
+  done: (text: string | null) => void,
+): void {
+  const chunks: Buffer[] = [];
+  let size = 0;
+  let over = false;
+  req.on('data', (chunk: Buffer) => {
+    size += chunk.length;
+    if (size > limit) over = true;
+    else chunks.push(chunk);
+  });
+  req.on('end', () => done(over ? null : Buffer.concat(chunks).toString('utf8')));
 }
 
 /** Read a JSON request body, with a size cap. */
@@ -705,6 +744,132 @@ export function startUiServer(options: UiServerOptions): Promise<RunningServer> 
             driver.close();
           }
         });
+        return;
+      }
+
+      // ── Google Sheets ───────────────────────────────────────────────────
+      // Read from a fresh load of the config files, not the copy taken at
+      // startup, so a setting saved here is visible — and used by the next
+      // export, which runs as a new process — without restarting.
+      const sheetsSettings = () => {
+        const fresh = loadConfig({
+          cwd: config.paths.root,
+          ...(options.configFile !== undefined && { configFile: options.configFile }),
+        });
+        const settings = fresh.exporters.sheets;
+        const keyFile =
+          settings.credentialsFile !== undefined
+            ? resolvePath(settings.credentialsFile, fresh.paths.root)
+            : undefined;
+        return {
+          fresh,
+          view: {
+            spreadsheetId: settings.spreadsheetId ?? null,
+            sheetName: settings.sheetName,
+            credentialsFile: settings.credentialsFile ?? null,
+            keyFound: keyFile !== undefined && fs.existsSync(keyFile),
+            clientEmail: keyFile !== undefined ? keyEmail(keyFile) : null,
+            writable: options.allowConfigWrite === true,
+          },
+        };
+      };
+
+      if (url.pathname === '/api/sheets/settings' && req.method === 'GET') {
+        json(res, 200, sheetsSettings().view);
+        return;
+      }
+
+      if (url.pathname === '/api/sheets/settings' && req.method === 'POST') {
+        if (options.allowConfigWrite !== true) {
+          json(res, 403, { error: 'settings are read-only — restart with --control' });
+          return;
+        }
+        readBody(req, (body) => {
+          const input = body as { spreadsheet?: unknown; sheetName?: unknown };
+          const spreadsheetId = parseSpreadsheetId(input.spreadsheet);
+          if (spreadsheetId === null) {
+            json(res, 400, {
+              error:
+                'That is not a Google Sheets link or id. Copy the address of the sheet from the browser.',
+            });
+            return;
+          }
+          const sheetName = parseSheetName(input.sheetName ?? 'Leads');
+          if (sheetName === null) {
+            json(res, 400, { error: 'The tab name must be 1 to 100 characters.' });
+            return;
+          }
+          const result = writeLocalConfig(
+            config,
+            {
+              'exporters.sheets.spreadsheetId': spreadsheetId,
+              'exporters.sheets.sheetName': sheetName,
+            },
+            SHEETS_KEYS,
+          );
+          if (!result.ok) {
+            json(res, 400, { error: result.error });
+            return;
+          }
+          const { view } = sheetsSettings();
+          // Something can outrank the local file. Saying "saved" while the old
+          // id stays in force would be a lie, so say what is in the way.
+          const overridden = view.spreadsheetId !== spreadsheetId || view.sheetName !== sheetName;
+          json(res, 200, {
+            ...view,
+            ...(overridden && {
+              warning:
+                options.configFile !== undefined
+                  ? 'Saved to gms.config.local.yaml, but this dashboard was started with --config, ' +
+                    'which skips that file. Restart it without --config.'
+                  : 'Saved, but a GMS_EXPORTERS__SHEETS__* environment variable overrides it.',
+            }),
+          });
+        });
+        return;
+      }
+
+      if (url.pathname === '/api/sheets/key' && req.method === 'POST') {
+        if (options.allowConfigWrite !== true) {
+          json(res, 403, { error: 'settings are read-only — restart with --control' });
+          return;
+        }
+        // A service-account key is ~2.4 KB. The body is never logged: it
+        // carries a private key.
+        readText(req, 64_000, (text) => {
+          try {
+            if (text === null) throw new KeyFileError('That file is far too large to be a key.');
+            const { clientEmail } = parseServiceAccountKey(text);
+            const file = saveServiceAccountKey(
+              text,
+              options.credentialsDir ?? defaultCredentialsDir(),
+            );
+            const result = writeLocalConfig(
+              config,
+              { 'exporters.sheets.credentialsFile': portablePath(file) },
+              SHEETS_KEYS,
+            );
+            if (!result.ok) {
+              json(res, 400, { error: result.error });
+              return;
+            }
+            options.logger?.info({ clientEmail }, 'sheets key saved from dashboard');
+            json(res, 200, { ...sheetsSettings().view, savedTo: file });
+          } catch (error) {
+            json(res, error instanceof KeyFileError ? 400 : 500, { error: errorMessage(error) });
+          }
+        });
+        return;
+      }
+
+      if (url.pathname === '/api/sheets/check' && req.method === 'POST') {
+        void checkSheets(sheetsSettings().fresh)
+          .then((results) => {
+            json(res, 200, { results });
+          })
+          .catch((error: unknown) => {
+            json(res, 500, { error: errorMessage(error) });
+          });
         return;
       }
 

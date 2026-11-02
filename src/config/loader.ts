@@ -43,7 +43,7 @@ function isPlainObject(value: unknown): value is PlainObject {
  * Arrays replace rather than concatenate: if a user sets `logging.redact`, they
  * mean *that* list, not that list appended to the default.
  */
-function mergeDeep(base: PlainObject, overlay: PlainObject): PlainObject {
+export function mergeDeep(base: PlainObject, overlay: PlainObject): PlainObject {
   const out: PlainObject = { ...base };
   for (const [key, overlayValue] of Object.entries(overlay)) {
     if (overlayValue === undefined) continue;

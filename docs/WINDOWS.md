@@ -40,10 +40,18 @@ never overwrite real data.
 
 ## Google Sheets export
 
-The service-account key is a secret and is not in the repository. Copy it to
-the path `exporters.sheets.credentialsFile` names in `gms.config.yaml`, under
-your user folder on the VPS (`~` is `C:\Users\<you>`). Then run
-`gms doctor --sheets`. See [GOOGLE_SHEETS.md](GOOGLE_SHEETS.md).
+All from the dashboard, in step 7 (**Share with your team**) on the Control page:
+
+1. Paste the sheet's link into **Sheet**, check the **Tab** name, and press
+   **Save**.
+2. **Choose key file** and pick the service account's `.json` key. It is
+   checked, stored in `C:\Users\<you>\gms-credentials\`, and recorded in
+   `gms.config.local.yaml`. The page then shows the account's address.
+3. In the sheet, press **Share** and add that address as an **Editor**.
+4. **Test connection** shows what works and what to fix. Then **Send to Sheet**.
+
+No restart is needed. Creating the service account and its key is covered in
+[GOOGLE_SHEETS.md](GOOGLE_SHEETS.md).
 
 ## Update
 

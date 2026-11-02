@@ -312,6 +312,12 @@ export const PAGE = String.raw`<!doctype html>
   .editor input::placeholder { color: var(--faint); }
   .editor .p { color: var(--faint); font-size: 11px; margin-top: 10px; }
   .step details { margin-top: 13px; }
+  .good { color: var(--verdigris); }
+  .warn { color: var(--amber); }
+  .bad { color: var(--rust); }
+  .checks { list-style: none; margin: 13px 0 0; padding: 0; font-size: 12px; }
+  .checks li { margin-bottom: 7px; }
+  .checks .muted { white-space: pre-wrap; margin: 3px 0 0 16px; }
   .states { gap: 5px; }
   .chip.st { padding: 6px 8px; min-width: 52px; text-align: left; }
   .chip.st small {
@@ -579,8 +585,9 @@ let ctlOverview = null;
 let uploaded = { cities: null, categories: null };
 
 async function loadControl() {
-  const [t, o, q] = await Promise.all([get('/api/tasks'), get('/api/overview'), get('/api/queue')]);
-  ctlState = t; ctlOverview = o; queue = q;
+  const [t, o, q, g] = await Promise.all([
+    get('/api/tasks'), get('/api/overview'), get('/api/queue'), get('/api/sheets/settings')]);
+  ctlState = t; ctlOverview = o; queue = q; sheets = g;
 
   $('#ctl-sub').textContent = t.enabled
     ? 'Run everything from here. Each step unlocks when the one before it is done.'
@@ -691,15 +698,8 @@ async function loadControl() {
       n: 7, title: 'Share with your team',
       why: 'Sends new leads to a Google Sheet anyone can open. Run it again any time — it only sends what is new.',
       blocked: !hasBusinesses, satisfied: false,
-      body:
-        '<div class="opts">' +
-        '<label>Sheet ID</label>' +
-        '<input type="text" id="g-id" placeholder="from the sheet URL" style="width:280px">' +
-        '<button class="go" id="do-sheets"' + (busy ? ' disabled' : '') + '>Send to Sheet</button>' +
-        '</div>' +
-        '<p style="margin-top:9px">The ID is the long part of the URL: ' +
-        'docs.google.com/spreadsheets/d/<b>THIS_PART</b>/edit. ' +
-        'Run <code>gms doctor --sheets</code> first — it prints the address to share the sheet with.</p>',
+      status: sheets.spreadsheetId && sheets.keyFound ? 'ready' : null,
+      body: sheetsBody(busy),
     },
   ];
 
@@ -727,6 +727,49 @@ async function loadControl() {
 
   if (t.enabled) wireControls();
   renderRun();
+}
+
+// ── Google Sheets ──────────────────────────────────────────────────────
+// Settings and the key are saved by the server into gms.config.local.yaml and
+// ~/gms-credentials. The key's contents never come back to the page; only the
+// address it authenticates as, which is what the sheet must be shared with.
+let sheets = { spreadsheetId: null, sheetName: 'Leads', credentialsFile: null, keyFound: false, clientEmail: null, writable: false };
+let sheetsCheck = null;
+let sheetsNote = null;
+
+function sheetsBody(busy) {
+  const url = sheets.spreadsheetId ? 'https://docs.google.com/spreadsheets/d/' + sheets.spreadsheetId + '/edit' : '';
+  const off = sheets.writable ? '' : ' disabled';
+  const key = sheets.keyFound
+    ? '<span class="good">&#10003; ' + esc(sheets.clientEmail || 'service account') + '</span>'
+    : sheets.credentialsFile
+      ? '<span class="bad">not found: ' + esc(sheets.credentialsFile) + '</span>'
+      : '<span class="muted">none yet</span>';
+  const marks = { ok: '<span class="good">&#10003;</span>', warn: '<span class="warn">!</span>', fail: '<span class="bad">&#10007;</span>' };
+  return '<div class="opts">' +
+    '<label>Sheet</label><input type="text" id="g-sheet" placeholder="paste the sheet’s link" style="width:380px" value="' + esc(url) + '"' + off + '>' +
+    '<label>Tab</label><input type="text" id="g-tab" style="width:110px" value="' + esc(sheets.sheetName) + '"' + off + '>' +
+    '<button class="go ghost" id="g-save"' + off + '>Save</button>' +
+    (url ? '<a href="' + esc(url) + '" target="_blank" rel="noopener">open the sheet</a>' : '') +
+    '</div><div class="opts"><label>Key file</label>' + key +
+    '<label class="chip">' + (sheets.keyFound ? 'Replace key' : 'Choose key file') +
+    '<input type="file" id="g-key" accept=".json,application/json" hidden' + off + '></label></div>' +
+    '<p style="margin-top:9px">' + (sheets.clientEmail
+      ? 'In the sheet, press Share and add <b>' + esc(sheets.clientEmail) + '</b> as an Editor.'
+      : 'The key is the .json file downloaded for the service account in Google Cloud: IAM &amp; Admin → Service accounts → Keys → Add key → JSON. It is stored in your user folder, never in the project.') + '</p>' +
+    '<div class="opts"><button class="go ghost" id="g-test">Test connection</button>' +
+    '<button class="go" id="do-sheets"' + (busy || !sheets.spreadsheetId ? ' disabled' : '') + '>Send to Sheet</button></div>' +
+    (sheetsNote ? '<div class="note ' + sheetsNote.tone + '">' + esc(sheetsNote.text) + '</div>' : '') +
+    (sheetsCheck ? '<ul class="checks">' + sheetsCheck.map((c) =>
+      '<li>' + marks[c.status] + ' <b>' + esc(c.name) + '</b> ' + esc(c.detail) +
+      (c.hint && c.status !== 'ok' ? '<div class="muted">' + esc(c.hint) + '</div>' : '') + '</li>').join('') + '</ul>' : '');
+}
+
+async function sheetsPost(url, body, contentType) {
+  const res = await fetch(url, { method: 'POST', headers: { 'content-type': contentType }, body });
+  const r = await res.json();
+  if (!res.ok) { sheetsNote = { tone: 'bad', text: r.error }; loadControl(); return null; }
+  return r;
 }
 
 // ── Queue order ────────────────────────────────────────────────────────
@@ -877,14 +920,34 @@ function wireControls() {
   on('#do-export', () => startTask('export', {
     entity: $('#x-entity').value, excelSafe: $('#x-excel').checked,
     splitByState: $('#x-split').checked, full: $('#x-full').checked }));
-  on('#do-sheets', () => {
-    const id = $('#g-id').value.trim();
-    if (id !== '' && !/^[A-Za-z0-9_-]{20,}$/.test(id)) {
-      alert('That does not look like a sheet ID. Copy the long part of the sheet URL, between /d/ and /edit.');
-      return;
-    }
-    startTask('export-sheets', { entity: 'leads-flat', spreadsheetId: id });
+  on('#g-save', async () => {
+    const r = await sheetsPost('/api/sheets/settings',
+      JSON.stringify({ spreadsheet: $('#g-sheet').value, sheetName: $('#g-tab').value }), 'application/json');
+    if (!r) return;
+    sheetsNote = { tone: r.warning ? 'bad' : 'ok', text: r.warning || 'Saved. The next export uses it.' };
+    sheetsCheck = null;
+    loadControl();
   });
+  const keyInput = $('#g-key');
+  if (keyInput) keyInput.addEventListener('change', async () => {
+    const file = keyInput.files[0];
+    if (!file) return;
+    const r = await sheetsPost('/api/sheets/key', await file.text(), 'application/json');
+    if (!r) return;
+    sheetsNote = { tone: 'ok', text: 'Key saved. Now share the sheet with the address shown, then test the connection.' };
+    sheetsCheck = null;
+    loadControl();
+  });
+  on('#g-test', async () => {
+    $('#g-test').disabled = true;
+    $('#g-test').textContent = 'Testing…';
+    const r = await sheetsPost('/api/sheets/check', '{}', 'application/json');
+    if (!r) return;
+    sheetsCheck = r.results;
+    sheetsNote = null;
+    loadControl();
+  });
+  on('#do-sheets', () => startTask('export-sheets', { entity: 'leads-flat' }));
 }
 
 // While a task runs, poll often enough that the log feels live.

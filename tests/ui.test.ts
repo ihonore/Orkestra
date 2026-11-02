@@ -6,6 +6,7 @@
  * would leave `gms` unable to start.
  */
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import vm from 'node:vm';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -15,6 +16,7 @@ import { migrate } from '../src/db/migrate.js';
 import { startUiServer, type RunningServer } from '../src/ui/server.js';
 import { PAGE } from '../src/ui/page.js';
 import { TaskManager, cliEntryPoint } from '../src/ui/tasks.js';
+import { parseSpreadsheetId, portablePath } from '../src/ui/sheets.js';
 import { cleanupTempDirs, tempDir, writeFile } from './helpers.js';
 
 const running: RunningServer[] = [];
@@ -46,6 +48,8 @@ async function serve(
     ...(options.allowControl !== undefined && { allowControl: options.allowControl }),
     // Never the real seeds/ folder: a test must not rewrite the project's lists.
     seedsDir: path.join(root, 'seeds'),
+    // Nor the real ~/gms-credentials.
+    credentialsDir: path.join(root, 'credentials'),
   });
   running.push(server);
   return { url: server.url, root, port: Number(new URL(server.url).port) };
@@ -562,4 +566,113 @@ describe('stopping a task', () => {
     expect(Date.now() - stoppedAt).toBeLessThan(15_000);
     expect(task.lines.join('\n')).not.toContain('killed');
   }, 60_000);
+});
+
+describe('google sheets settings', () => {
+  const KEY = JSON.stringify({
+    type: 'service_account',
+    project_id: 'p',
+    private_key: '-----BEGIN PRIVATE KEY-----\nabc\n-----END PRIVATE KEY-----\n',
+    client_email: 'gms-exporter@p.iam.gserviceaccount.com',
+  });
+  const ID = '1fMmJb6FZT1N5WXmg_Jf9e92dxAZ_DlJGWcPZXNqyJIE';
+  const settings = async (url: string) =>
+    (await (await fetch(`${url}/api/sheets/settings`)).json()) as Record<string, unknown>;
+  const post = (url: string, endpoint: string, body: string) =>
+    fetch(`${url}${endpoint}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body,
+    });
+
+  it('accepts the sheet as a pasted link, and uses it without a restart', async () => {
+    const { url, root } = await serve({ allowConfigWrite: true, allowControl: true });
+    const response = await post(
+      url,
+      '/api/sheets/settings',
+      JSON.stringify({
+        spreadsheet: `https://docs.google.com/spreadsheets/d/${ID}/edit#gid=0`,
+        sheetName: 'Team',
+      }),
+    );
+    expect(response.status).toBe(200);
+    expect(await settings(url)).toMatchObject({ spreadsheetId: ID, sheetName: 'Team' });
+    expect(fs.readFileSync(path.join(root, 'gms.config.local.yaml'), 'utf8')).toContain(ID);
+  });
+
+  it('refuses something that is not a sheet', async () => {
+    const { url } = await serve({ allowConfigWrite: true, allowControl: true });
+    const response = await post(
+      url,
+      '/api/sheets/settings',
+      JSON.stringify({ spreadsheet: 'my sheet' }),
+    );
+    expect(response.status).toBe(400);
+  });
+
+  it('is refused on a read-only dashboard', async () => {
+    const { url } = await serve();
+    expect(
+      (await post(url, '/api/sheets/settings', JSON.stringify({ spreadsheet: ID }))).status,
+    ).toBe(403);
+    expect((await post(url, '/api/sheets/key', KEY)).status).toBe(403);
+  });
+
+  it('stores a service-account key privately and reports only its address', async () => {
+    const { url, root } = await serve({ allowConfigWrite: true, allowControl: true });
+    const response = await post(url, '/api/sheets/key', KEY);
+    const body = await response.text();
+    expect(response.status).toBe(200);
+    // The private key never travels back to the page.
+    expect(body).not.toContain('PRIVATE KEY');
+
+    const file = path.join(root, 'credentials', 'gms-exporter.json');
+    expect(fs.readFileSync(file, 'utf8')).toBe(KEY);
+    if (process.platform !== 'win32') expect(fs.statSync(file).mode & 0o077).toBe(0);
+    expect(await settings(url)).toMatchObject({
+      keyFound: true,
+      clientEmail: 'gms-exporter@p.iam.gserviceaccount.com',
+    });
+  });
+
+  it('turns away the look-alike files from the Cloud console', async () => {
+    const { url, root } = await serve({ allowConfigWrite: true, allowControl: true });
+    for (const wrong of [
+      JSON.stringify({ installed: { client_id: 'x' } }),
+      JSON.stringify({ type: 'authorized_user' }),
+      'not json',
+    ]) {
+      const response = await post(url, '/api/sheets/key', wrong);
+      expect(response.status, wrong).toBe(400);
+    }
+    expect(fs.existsSync(path.join(root, 'credentials'))).toBe(false);
+  });
+
+  it('tests the connection, reporting what is missing', async () => {
+    const { url } = await serve();
+    const body = (await (await post(url, '/api/sheets/check', '{}')).json()) as {
+      results: { status: string; detail: string }[];
+    };
+    expect(body.results).toEqual([
+      expect.objectContaining({ status: 'warn', detail: 'not configured' }),
+    ]);
+  });
+
+  it('reads the id out of every kind of sheet link', () => {
+    for (const link of [
+      ID,
+      `https://docs.google.com/spreadsheets/d/${ID}/edit?usp=sharing`,
+      `https://docs.google.com/spreadsheets/d/${ID}`,
+      `  docs.google.com/spreadsheets/d/${ID}/copy  `,
+    ]) {
+      expect(parseSpreadsheetId(link), link).toBe(ID);
+    }
+    expect(parseSpreadsheetId('https://example.com/')).toBeNull();
+  });
+
+  it('records a key in the home folder as ~/..., so the config works on any machine', () => {
+    expect(portablePath(path.join(os.homedir(), 'gms-credentials', 'k.json'))).toBe(
+      '~/gms-credentials/k.json',
+    );
+  });
 });

@@ -528,6 +528,14 @@ A local web page showing progress, leads, failures and exports — and, with
   skipping the handler that finishes in-flight searches and closes the browser.
   A task still running `runtime.shutdownGraceSeconds` + 30 s later is killed.
   Closing the dashboard, or losing it, stops its tasks the same way.
+- **Step 7 sets up Google Sheets** without editing files. A pasted sheet link
+  and tab name go to `gms.config.local.yaml`. A chosen key file is checked to be
+  a service-account key (an OAuth client secret is refused by name), saved to
+  `~/gms-credentials/gms-exporter.json` readable only by you, and recorded as
+  `~/gms-credentials/gms-exporter.json` so the same line works on any machine.
+  The page only ever sees the key's address. **Test connection** runs the
+  checks of `gms doctor --sheets`. These settings apply immediately, with no
+  restart. Choosing a key replaces the one already at that path.
 - Buttons launch real `gms` commands as separate processes from a fixed
   allow-list with typed parameters — never a free-text command line — so a crash
   in the scraper can't take the dashboard down.
