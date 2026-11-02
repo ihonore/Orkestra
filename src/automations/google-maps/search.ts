@@ -107,7 +107,10 @@ export interface ScrollOptions {
   readonly maxListings?: number;
   readonly maxRounds?: number;
   /** Consecutive rounds yielding nothing new before stopping. */
+  /** Rounds at the bottom of the list with nothing new before stopping. */
   readonly maxIdleRounds?: number;
+  /** How long to wait at the bottom for Maps to fetch the next batch. */
+  readonly loadWaitMs?: Range;
   readonly timeBudgetMs?: number;
   readonly stepPx?: Range;
   readonly pauseMs?: Range;
@@ -134,6 +137,7 @@ export async function scrollFeed(page: Page, options: ScrollOptions = {}): Promi
   const timeBudgetMs = options.timeBudgetMs ?? 180_000;
   const stepPx = options.stepPx ?? [300, 900];
   const pauseMs = options.pauseMs ?? [350, 1_200];
+  const loadWaitMs = options.loadWaitMs ?? [1_200, 2_500];
 
   const seen = new Map<string, string>();
   for (const url of options.initialUrls ?? []) {
@@ -151,6 +155,9 @@ export async function scrollFeed(page: Page, options: ScrollOptions = {}): Promi
 
   let rounds = 0;
   let idleRounds = 0;
+  // Whether the last scroll left the list at its bottom. Starts true so a list
+  // too short to scroll at all can still stop on its first idle rounds.
+  let atBottom = true;
   let reason: ScrollStopReason = 'max-rounds';
 
   for (; rounds < maxRounds; rounds += 1) {
@@ -179,7 +186,13 @@ export async function scrollFeed(page: Page, options: ScrollOptions = {}): Promi
 
     await options.onProgress?.([...seen.values()], rounds);
 
-    if (seen.size === before) {
+    // A round only counts as idle at the bottom of the list. Maps fetches the
+    // next 20 when — and only when — the feed is scrolled to its end, so rounds
+    // spent scrolling through what is already loaded find nothing new by
+    // design. Counting those stopped searches at their first batch: on real
+    // runs, the median "stagnated" search had found exactly 20 places, while
+    // searches that reached the end of the list had a median of 107.
+    if (seen.size === before && atBottom) {
       idleRounds += 1;
       if (idleRounds >= maxIdleRounds) {
         // Distinguish a genuinely complete list from one that merely stopped
@@ -187,7 +200,7 @@ export async function scrollFeed(page: Page, options: ScrollOptions = {}): Promi
         reason = (await hasEndOfList(page)) ? 'end-of-list' : 'stagnation';
         break;
       }
-    } else {
+    } else if (seen.size !== before) {
       idleRounds = 0;
     }
 
@@ -197,8 +210,17 @@ export async function scrollFeed(page: Page, options: ScrollOptions = {}): Promi
       break;
     }
 
-    await scrollOnce(page, feedSelector, jitter(stepPx));
-    await humanPause(pauseMs, options.signal !== undefined ? { signal: options.signal } : {});
+    const pauseOptions = options.signal !== undefined ? { signal: options.signal } : {};
+    if (idleRounds > 0) {
+      // At the bottom with nothing new: nudge up and back down, so Maps sees a
+      // fresh scroll to the end and fetches again, then give it time to.
+      await scrollOnce(page, feedSelector, -jitter([120, 260]));
+      atBottom = await scrollOnce(page, feedSelector, 1_000_000);
+      await humanPause(loadWaitMs, pauseOptions);
+    } else {
+      atBottom = await scrollOnce(page, feedSelector, jitter(stepPx));
+      await humanPause(pauseMs, pauseOptions);
+    }
   }
 
   const urls = [...seen.values()].slice(0, maxListings);
@@ -213,7 +235,8 @@ export async function scrollFeed(page: Page, options: ScrollOptions = {}): Promi
 }
 
 /**
- * Scroll the feed container by `delta` pixels.
+ * Scroll the feed container by `delta` pixels, and report whether it is now at
+ * the bottom.
  *
  * `mouse.wheel` would target whatever is under the pointer, which is not
  * reliably the feed. Setting `scrollTop` on the container itself is precise, and
@@ -222,11 +245,15 @@ export async function scrollFeed(page: Page, options: ScrollOptions = {}): Promi
  */
 /* eslint-disable no-restricted-globals --
    The evaluate() callback below runs in the browser, not in Node. */
-async function scrollOnce(page: Page, feedSelector: string, delta: number): Promise<void> {
-  await page.evaluate(
+async function scrollOnce(page: Page, feedSelector: string, delta: number): Promise<boolean> {
+  return page.evaluate(
     ([selector, amount]: [string, number]) => {
       const feed = document.querySelector(selector);
-      if (feed !== null) feed.scrollTop += amount;
+      if (feed === null) return true;
+      feed.scrollTop += amount;
+      // A few pixels of slack: zoom and fractional layout leave scrollTop just
+      // short of the exact maximum.
+      return feed.scrollTop + feed.clientHeight >= feed.scrollHeight - 8;
     },
     [feedSelector, delta] as [string, number],
   );

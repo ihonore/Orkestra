@@ -358,6 +358,11 @@ search, saves what it finds.
   `--workers 20` really starts 8.
 - **`--max-jobs` counts searches started**, including ones that fail or come back
   blocked, and several workers can overshoot it by one or two.
+- A search scrolls until Maps shows "end of the list", or until nothing new
+  arrives in three rounds **at the bottom of the list**, waiting 1.2–2.5 s
+  each time for the next batch of 20. Before this fix, rounds spent scrolling
+  through the first batch also counted, so about half of all searches stopped
+  at 20 results.
 - **Each search stops at 120 listings**, hardcoded. A dense city + category is
   silently truncated.
 - **It exits 0 even if every job failed.** Judge by "jobs failed" in the summary
