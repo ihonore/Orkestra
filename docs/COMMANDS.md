@@ -629,7 +629,7 @@ position, so neither re-sends what the other sent.
 
 | Flag                          | Default                                    | Meaning                                      |
 | ----------------------------- | ------------------------------------------ | -------------------------------------------- |
-| `-e, --entity <name>`       | `leads-flat`                             | `leads-flat`, `businesses` or `emails` |
+| `-e, --entity <name>`       | from `exporters.sheets.layout`           | any entity above                       |
 | `-s, --spreadsheet-id <id>` | `exporters.sheets.spreadsheetId`         | From the sheet URL                           |
 | `-t, --tab <name>`          | `exporters.sheets.sheetName` (`Leads`) | Tab to append to                             |
 | `--full`                    | off                                        | Re-send everything                           |
