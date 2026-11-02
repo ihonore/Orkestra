@@ -16,6 +16,7 @@ import {
   type CrawlResult,
   startUrlFor,
 } from '../../enrichment/website-emails/crawler.js';
+import { validateEmail } from '../../enrichment/website-emails/validate/rules.js';
 import { openDatabaseFromConfig } from '../../db/client.js';
 import { EmailsRepository } from '../../db/repositories/emails.js';
 import { formatBytes, formatDuration, heading, keyValue, style, symbol } from '../output.js';
@@ -67,6 +68,25 @@ export async function runEnrichEmails(options: EnrichCommandOptions): Promise<vo
     1_800_000,
     config.enrichment.websiteEmails.maxTimePerDomainMs * 10,
   );
+  // Re-judge what is already stored. Rules improve — the placeholder and
+  // invented-ending checks arrived after thousands of addresses had been kept —
+  // and a verdict made once at crawl time would otherwise stand forever, so
+  // info@youwebsite.com would keep reaching the sheet.
+  const validation = {
+    excludeGovernment: config.enrichment.websiteEmails.validation.excludeGovernment,
+    excludeEducation: config.enrichment.websiteEmails.validation.excludeEducation,
+    blockedDomains: config.enrichment.websiteEmails.validation.blockedDomains,
+  };
+  const rejects = emails
+    .storedVerdicts()
+    .filter((row) => row.is_junk === 0)
+    .map((row) => ({ id: row.id, verdict: validateEmail(row.address, validation) }))
+    .filter((row) => row.verdict.isJunk)
+    .map((row) => ({ id: row.id, reason: row.verdict.junkReason ?? 'placeholder' }));
+  const rejudged = emails.markJunk(rejects);
+  if (rejudged > 0)
+    logger.info({ count: rejudged }, 'stored addresses now rejected by newer rules');
+
   const reclaimed = emails.reclaimStalledDomains(domainLeaseMs);
   if (reclaimed > 0) {
     logger.info({ reclaimed }, 'returned stalled domains to the queue');

@@ -592,3 +592,30 @@ describe('re-classifying an address', () => {
     });
   });
 });
+
+describe('template placeholders and invented endings', () => {
+  // Both seen in the sheet the team reads: info@youwebsite.com and
+  // support@yourdomain.tld, each looking like a real lead.
+  it.each([
+    'info@youwebsite.com',
+    'info@yourwebsite.com',
+    'hello@yourbusiness.com',
+    'contact@yourcompanyname.com',
+    'me@mydomain.net',
+    'support@yourdomain.tld',
+    'admin@server.local',
+  ])('rejects %s', (address) => {
+    expect(validateEmail(address).isJunk).toBe(true);
+  });
+
+  it.each([
+    'dr@yourcatvet.com',
+    'info@yourgreenpal.com',
+    'team@yourbusinesslifestyle.com',
+    'office@acme.agency',
+    'counsel@smith.lawyer',
+    'owner@acme.co.uk',
+  ])('keeps the real address %s', (address) => {
+    expect(validateEmail(address).isJunk).toBe(false);
+  });
+});

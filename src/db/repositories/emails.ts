@@ -62,6 +62,30 @@ export class EmailsRepository extends BaseRepository {
   readonly #finishDomain: PreparedStatement;
   readonly #isSuppressed: PreparedStatement<{ n: number }>;
 
+  /** Every stored address with its current verdict, for re-checking. */
+  storedVerdicts(): { id: number; address: string; is_junk: number; junk_reason: string | null }[] {
+    return this.driver
+      .prepare<{ id: number; address: string; is_junk: number; junk_reason: string | null }>(
+        `SELECT id, address, is_junk, junk_reason FROM emails`,
+      )
+      .all();
+  }
+
+  /**
+   * Mark addresses junk that a newer rule rejects. Only ever junk-wards: an
+   * address junked by a rule since loosened is better re-found by a crawl, which
+   * also restores its role and free-mail flags.
+   */
+  markJunk(rejects: readonly { id: number; reason: string }[]): number {
+    if (rejects.length === 0) return 0;
+    const statement = this.driver.prepare(
+      `UPDATE emails SET is_junk = 1, junk_reason = ? WHERE id = ? AND is_junk = 0`,
+    );
+    return this.inTransaction(() =>
+      rejects.reduce((n, r) => n + statement.run([r.reason, r.id]).changes, 0),
+    );
+  }
+
   constructor(driver: SqliteDriver) {
     super(driver);
 

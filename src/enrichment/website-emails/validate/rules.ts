@@ -17,6 +17,7 @@
  * most specific one. Rejects are stored rather than dropped: a rule that is too
  * aggressive is invisible unless you can see what it removed.
  */
+import { parse } from 'tldts';
 
 export type JunkReason =
   | 'syntax'
@@ -155,6 +156,16 @@ const PLACEHOLDER_DOMAINS = new Set([
   'localhost',
 ]);
 
+/**
+ * The template forms of a placeholder domain: "you(r)/my" + an optional "web"
+ * + a generic noun, e.g. yourwebsite.com, youwebsite.com, yourbusiness.com,
+ * mydomain.net, yourcompanyname.com. Anchored on the whole first label so real
+ * businesses that merely start with "your" — yourcatvet.com, yourgreenpal.com —
+ * are not caught. Found in the data: info@youwebsite.com, support@yourdomain.tld.
+ */
+const PLACEHOLDER_DOMAIN_RE =
+  /^(?:your|you|my)-?(?:web)?(?:site|domain|company|business|email|mail|url|server)?(?:-?name)?\.[a-z.]+$/;
+
 /** File extensions that mean the "domain" is really a filename. */
 const ASSET_EXTENSIONS =
   /\.(jpg|jpeg|png|gif|svg|webp|avif|bmp|ico|css|js|mjs|json|xml|pdf|woff2?|ttf|eot|mp4|webm|mp3|zip|gz)$/i;
@@ -269,6 +280,12 @@ export function validateEmail(raw: string, options: ValidationOptions = {}): Ema
   // 2. A domain ending in a file extension is a filename, not a host.
   if (ASSET_EXTENSIONS.test(domain)) return junk('asset_extension');
 
+  // 2b. A domain whose ending is not a real one (".tld", ".local", ".invalid")
+  // cannot receive mail. The public-suffix list knows every real ending,
+  // including the newer ones such as .agency and .lawyer. After the asset check,
+  // so `logo@2x.png` keeps the more telling reason.
+  if (parse(domain).isIcann !== true) return junk('invalid_tld');
+
   // 3. The address was really a fragment of a URL.
   if (/^(https?|www)/i.test(localPart) || localPart.includes('/')) return junk('inside_url');
 
@@ -276,7 +293,9 @@ export function validateEmail(raw: string, options: ValidationOptions = {}): Ema
   if (VENDOR_DOMAINS.some((pattern) => pattern.test(domain))) return junk('vendor_telemetry');
 
   // 5. Template placeholders.
-  if (PLACEHOLDER_DOMAINS.has(domain)) return junk('placeholder');
+  if (PLACEHOLDER_DOMAINS.has(domain) || PLACEHOLDER_DOMAIN_RE.test(domain)) {
+    return junk('placeholder');
+  }
 
   // 6. A hex-run local part is a public key, not a mailbox.
   if (HASH_LOCAL_RE.test(localPart)) return junk('hash_local_part');
