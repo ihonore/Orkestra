@@ -24,6 +24,8 @@ export interface ProgressGroup {
   readonly leased: number;
   readonly failed: number;
   readonly skipped: number;
+  /** Parked because the group's city or service is paused. Still unfinished. */
+  readonly paused: number;
   /** When the most recent job in this group finished, if any have. */
   readonly lastFinishedAt: number | null;
 }
@@ -63,10 +65,11 @@ export class ProgressRepository extends BaseRepository {
 
     // A group counts as complete when nothing is left to run: done and skipped
     // both mean "will not run again". Failed jobs keep a group incomplete,
-    // because they are exactly what an operator needs to find.
+    // because they are exactly what an operator needs to find, and so do
+    // paused ones — pausing a city does not finish it.
     const having =
       query.incompleteOnly === true
-        ? `HAVING SUM(status IN ('pending', 'leased', 'failed')) > 0`
+        ? `HAVING SUM(status IN ('pending', 'leased', 'failed', 'paused')) > 0`
         : '';
 
     // GROUP BY and ORDER BY repeat the full expressions rather than referring to
@@ -87,6 +90,7 @@ export class ProgressRepository extends BaseRepository {
         leased: number;
         failed: number;
         skipped: number;
+        paused: number;
         lastFinishedAt: number | null;
       }>(
         `SELECT ${groupKey}              AS group_key,
@@ -98,6 +102,7 @@ export class ProgressRepository extends BaseRepository {
                 SUM(status = 'leased')   AS leased,
                 SUM(status = 'failed')   AS failed,
                 SUM(status = 'skipped')  AS skipped,
+                SUM(status = 'paused')   AS paused,
                 MAX(finished_at)         AS lastFinishedAt
            FROM jobs
           WHERE automation_id = ?

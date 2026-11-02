@@ -7,6 +7,7 @@ import { displayPath, resolvePath } from '../../core/util/paths.js';
 import { checkIntegrity, describeDatabase, openDatabaseFromConfig } from '../../db/client.js';
 import { appliedMigrations, migrate, pendingMigrations } from '../../db/migrate.js';
 import { MetaRepository, META_KEYS } from '../../db/repositories/meta.js';
+import { loadBundledSeedsOnce } from '../../seeds/bundled.js';
 import { APP_VERSION } from '../../version.js';
 import { formatBytes, formatDuration, heading, keyValue, style, symbol } from '../output.js';
 
@@ -57,6 +58,17 @@ export function runDbMigrate(options: DbCommandOptions & { dryRun: boolean }): v
     }
     console.log(style.grey(`  database  ${displayPath(driver.file)}`));
     console.log(style.grey(`  install   ${installId}`));
+
+    // A new database starts with the committed city and service lists, so a
+    // fresh checkout — on the VPS or anywhere else — can plan straight away.
+    const seeded = loadBundledSeedsOnce(driver);
+    if (seeded !== null) {
+      const parts = [
+        seeded.cities !== null ? `${seeded.cities.result.inserted} cities` : null,
+        seeded.categories !== null ? `${seeded.categories.result.inserted} services` : null,
+      ].filter((part) => part !== null);
+      console.log(`${symbol.ok} loaded ${parts.join(' and ')} from seeds/`);
+    }
   } finally {
     driver.close();
   }

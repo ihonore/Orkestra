@@ -19,6 +19,7 @@ import {
   type ProgressGroup,
 } from '../../db/repositories/progress.js';
 import { CategoriesRepository, CitiesRepository } from '../../db/repositories/seeds.js';
+import { syncQueue } from '../../seeds/queue.js';
 import { bar, formatDuration, heading, keyValue, percent, style, symbol } from '../output.js';
 
 /** The automation the grouped view falls back to when `-a` is not given. */
@@ -288,6 +289,13 @@ export function runJobsRetry(options: JobsRetryOptions): void {
       ...(options.status !== undefined && { status: options.status }),
       ...(options.ids !== undefined && { ids: options.ids }),
     });
+    // Retrying a paused city's failed search would otherwise run it.
+    const parked = syncQueue(driver).statusChanged;
+    if (parked > 0) {
+      console.log(
+        style.grey(`${parked} of them belong to a paused city or service and stay paused.`),
+      );
+    }
     console.log(
       n === 0
         ? style.grey('No jobs matched — nothing to retry.')

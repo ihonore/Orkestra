@@ -85,6 +85,18 @@ export function cleanText(input: unknown): string | null {
   return text;
 }
 
+/**
+ * An optional on/off column. Blank means "not stated", so the caller keeps its
+ * default; only an explicit no-like value turns a row off.
+ */
+export function cleanActive(input: unknown): boolean | undefined {
+  if (typeof input === 'boolean') return input;
+  const text = cleanText(input)?.toLowerCase();
+  if (text === undefined) return undefined;
+  if (['0', 'no', 'n', 'false', 'off', 'paused', 'inactive'].includes(text)) return false;
+  return true;
+}
+
 /** Parse a spreadsheet cell to a finite number, or null. */
 export function cleanNumber(input: unknown): number | null {
   if (input === null || input === undefined || input === '') return null;

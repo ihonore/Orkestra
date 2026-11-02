@@ -23,6 +23,7 @@ import {
 import { buildQuery } from '../../automations/google-maps/search.js';
 import type { MergeResult } from '../../automations/google-maps/extract/merge.js';
 import { openDatabaseFromConfig } from '../../db/client.js';
+import { syncQueue } from '../../seeds/queue.js';
 import { BusinessesRepository } from '../../db/repositories/businesses.js';
 import { MetaRepository } from '../../db/repositories/meta.js';
 import { formatDuration, heading, keyValue, style, symbol } from '../output.js';
@@ -129,6 +130,14 @@ export async function runRun(options: RunCommandOptions): Promise<void> {
   // Stable per database, so it identifies browsers this project launched and
   // nobody else's — including a second project on the same machine.
   const installId = new MetaRepository(driver).ensureInstallId();
+
+  // Apply the queue plan before anything is claimed: re-park searches of
+  // paused cities that drifted back to pending (released at shutdown, or
+  // retried), and order the rest — the order shifts as searches finish.
+  if (automationId === 'google-maps') {
+    const synced = syncQueue(driver);
+    logger.info(synced, 'queue order applied');
+  }
 
   // A previous run killed with SIGKILL (or a closed terminal window) leaves
   // Chromium behind: Playwright's own cleanup never gets to run. Only genuine

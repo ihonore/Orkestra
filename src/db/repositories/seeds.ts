@@ -37,6 +37,11 @@ export interface CityInput {
   readonly population?: number | null;
   readonly legacyStatus?: string | null;
   readonly source?: string | null;
+  /**
+   * Applied when the row is first inserted, never on update: re-importing a
+   * sheet must not quietly resume a city someone paused on purpose.
+   */
+  readonly active?: boolean;
 }
 
 export interface CategoryRecord {
@@ -55,6 +60,8 @@ export interface CategoryInput {
   readonly aliases?: readonly string[] | null;
   readonly weight?: number;
   readonly legacyStatus?: string | null;
+  /** Applied on first insert only. See {@link CityInput.active}. */
+  readonly active?: boolean;
 }
 
 export interface UpsertResult {
@@ -67,6 +74,31 @@ const CITY_COLUMNS = `id, zip, city, state, state_code, county, county_fips, lat
 
 const CATEGORY_COLUMNS = `id, name, slug, aliases, weight, active, legacy_status`;
 
+function cityParams(c: CityInput, now: Timestamp): Record<string, string | number | null> {
+  return {
+    zip: c.zip,
+    city: c.city,
+    state: c.state,
+    stateCode: c.stateCode,
+    county: c.county ?? null,
+    countyFips: c.countyFips ?? null,
+    lat: c.lat,
+    lng: c.lng,
+    population: c.population ?? null,
+    now,
+  };
+}
+
+function categoryParams(c: CategoryInput, now: Timestamp): Record<string, string | number | null> {
+  return {
+    name: c.name,
+    slug: c.slug,
+    aliases: c.aliases && c.aliases.length > 0 ? JSON.stringify(c.aliases) : null,
+    weight: c.weight ?? 1.0,
+    now,
+  };
+}
+
 export class CitiesRepository extends BaseRepository {
   readonly #upsert: PreparedStatement;
 
@@ -74,9 +106,9 @@ export class CitiesRepository extends BaseRepository {
     super(driver);
     this.#upsert = driver.prepare(
       `INSERT INTO cities (zip, city, state, state_code, county, county_fips, lat, lng,
-                           population, legacy_status, source, created_at, updated_at)
+                           population, active, legacy_status, source, created_at, updated_at)
        VALUES (:zip, :city, :state, :stateCode, :county, :countyFips, :lat, :lng,
-               :population, :legacyStatus, :source, :now, :now)
+               :population, :active, :legacyStatus, :source, :now, :now)
        ON CONFLICT (zip) DO UPDATE SET
          city = :city, state = :state, state_code = :stateCode, county = :county,
          county_fips = :countyFips, lat = :lat, lng = :lng,
@@ -107,6 +139,7 @@ export class CitiesRepository extends BaseRepository {
           lat: c.lat,
           lng: c.lng,
           population: c.population ?? null,
+          active: c.active === false ? 0 : 1,
           legacyStatus: c.legacyStatus ?? null,
           source: c.source ?? null,
           now,
@@ -115,6 +148,66 @@ export class CitiesRepository extends BaseRepository {
       const inserted = this.count(false) - before;
       return { inserted, updated: cities.length - inserted };
     });
+  }
+
+  /**
+   * Add one city. Unlike {@link upsertMany} a zip that already exists is an
+   * error rather than an overwrite: someone typing a city into a form means
+   * "a new one", and silently replacing another row would lose it.
+   */
+  insert(city: CityInput, now: Timestamp = Date.now()): number {
+    const result = this.driver
+      .prepare(
+        `INSERT INTO cities (zip, city, state, state_code, county, county_fips, lat, lng,
+                             population, source, created_at, updated_at)
+         VALUES (:zip, :city, :state, :stateCode, :county, :countyFips, :lat, :lng,
+                 :population, :source, :now, :now)`,
+      )
+      .run({ ...cityParams(city, now), source: city.source ?? null });
+    return Number(result.lastInsertRowid);
+  }
+
+  /** Replace a city's fields in place. The id — and so every job key — is kept. */
+  update(id: number, city: CityInput, now: Timestamp = Date.now()): boolean {
+    return (
+      this.driver
+        .prepare(
+          `UPDATE cities
+              SET zip = :zip, city = :city, state = :state, state_code = :stateCode,
+                  county = :county, county_fips = :countyFips, lat = :lat, lng = :lng,
+                  population = :population, updated_at = :now
+            WHERE id = :id`,
+        )
+        .run({ ...cityParams(city, now), id }).changes > 0
+    );
+  }
+
+  setActive(id: number, active: boolean, now: Timestamp = Date.now()): boolean {
+    return (
+      this.driver
+        .prepare(`UPDATE cities SET active = ?, updated_at = ? WHERE id = ?`)
+        .run([active ? 1 : 0, now, id]).changes > 0
+    );
+  }
+
+  delete(id: number): boolean {
+    return this.driver.prepare(`DELETE FROM cities WHERE id = ?`).run([id]).changes > 0;
+  }
+
+  byId(id: number): CityRecord | null {
+    return (
+      this.driver
+        .prepare<CityRecord>(`SELECT ${CITY_COLUMNS} FROM cities WHERE id = ?`)
+        .get([id]) ?? null
+    );
+  }
+
+  byZip(zip: string): CityRecord | null {
+    return (
+      this.driver
+        .prepare<CityRecord>(`SELECT ${CITY_COLUMNS} FROM cities WHERE zip = ?`)
+        .get([zip]) ?? null
+    );
   }
 
   all(activeOnly = true): CityRecord[] {
@@ -166,8 +259,9 @@ export class CategoriesRepository extends BaseRepository {
   constructor(driver: SqliteDriver) {
     super(driver);
     this.#upsert = driver.prepare(
-      `INSERT INTO categories (name, slug, aliases, weight, legacy_status, created_at, updated_at)
-       VALUES (:name, :slug, :aliases, :weight, :legacyStatus, :now, :now)
+      `INSERT INTO categories (name, slug, aliases, weight, active, legacy_status,
+                               created_at, updated_at)
+       VALUES (:name, :slug, :aliases, :weight, :active, :legacyStatus, :now, :now)
        ON CONFLICT (slug) DO UPDATE SET
          name = :name, aliases = :aliases, weight = :weight,
          legacy_status = :legacyStatus, updated_at = :now`,
@@ -184,6 +278,7 @@ export class CategoriesRepository extends BaseRepository {
           slug: c.slug,
           aliases: c.aliases ? JSON.stringify(c.aliases) : null,
           weight: c.weight ?? 1.0,
+          active: c.active === false ? 0 : 1,
           legacyStatus: c.legacyStatus ?? null,
           now,
         });
@@ -191,6 +286,59 @@ export class CategoriesRepository extends BaseRepository {
       const inserted = this.count(false) - before;
       return { inserted, updated: categories.length - inserted };
     });
+  }
+
+  /** Add one category. A slug that already exists is an error, as for cities. */
+  insert(category: CategoryInput, now: Timestamp = Date.now()): number {
+    const result = this.driver
+      .prepare(
+        `INSERT INTO categories (name, slug, aliases, weight, created_at, updated_at)
+         VALUES (:name, :slug, :aliases, :weight, :now, :now)`,
+      )
+      .run(categoryParams(category, now));
+    return Number(result.lastInsertRowid);
+  }
+
+  /** Replace a category's fields in place, keeping its id. */
+  update(id: number, category: CategoryInput, now: Timestamp = Date.now()): boolean {
+    return (
+      this.driver
+        .prepare(
+          `UPDATE categories
+              SET name = :name, slug = :slug, aliases = :aliases, weight = :weight,
+                  updated_at = :now
+            WHERE id = :id`,
+        )
+        .run({ ...categoryParams(category, now), id }).changes > 0
+    );
+  }
+
+  setActive(id: number, active: boolean, now: Timestamp = Date.now()): boolean {
+    return (
+      this.driver
+        .prepare(`UPDATE categories SET active = ?, updated_at = ? WHERE id = ?`)
+        .run([active ? 1 : 0, now, id]).changes > 0
+    );
+  }
+
+  delete(id: number): boolean {
+    return this.driver.prepare(`DELETE FROM categories WHERE id = ?`).run([id]).changes > 0;
+  }
+
+  byId(id: number): CategoryRecord | null {
+    return (
+      this.driver
+        .prepare<CategoryRecord>(`SELECT ${CATEGORY_COLUMNS} FROM categories WHERE id = ?`)
+        .get([id]) ?? null
+    );
+  }
+
+  bySlug(slug: string): CategoryRecord | null {
+    return (
+      this.driver
+        .prepare<CategoryRecord>(`SELECT ${CATEGORY_COLUMNS} FROM categories WHERE slug = ?`)
+        .get([slug]) ?? null
+    );
   }
 
   all(activeOnly = true): CategoryRecord[] {

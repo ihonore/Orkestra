@@ -87,7 +87,7 @@ export async function sheetNames(file: string): Promise<string[]> {
  * and the only subtleties that matter are quoted fields containing commas,
  * escaped quotes, and CRLF.
  */
-function readCsv(file: string): SheetRows {
+export function readCsv(file: string): SheetRows {
   const text = fs.readFileSync(file, 'utf8').replace(/^\uFEFF/, '');
   const rows: SheetRows = [];
   let row: Cell[] = [];

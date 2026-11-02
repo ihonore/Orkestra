@@ -21,6 +21,10 @@ export type ErrorCode =
   | 'EXPORT_INCOMPLETE'
   | 'PLAN_NO_SEEDS'
   | 'PLAN_NO_MATCH'
+  | 'SEED_INVALID'
+  | 'SEED_DUPLICATE'
+  | 'SEED_NOT_FOUND'
+  | 'SEED_IN_USE'
   | 'PLATFORM_UNSUPPORTED'
   | 'FATAL';
 
@@ -61,6 +65,8 @@ export class DatabaseError extends AppError {}
 export class PlatformError extends AppError {}
 /** Bad or unreadable seed data. Always a user-fixable input problem. */
 export class ImportError extends AppError {}
+/** A seed edit that was refused: invalid, a duplicate, or still referenced. */
+export class SeedError extends AppError {}
 
 export function isAppError(value: unknown): value is AppError {
   return (

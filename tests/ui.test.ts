@@ -26,7 +26,7 @@ afterEach(async () => {
 /** A project directory with a migrated, empty database. */
 async function serve(
   options: { allowConfigWrite?: boolean; allowControl?: boolean } = {},
-): Promise<{ url: string; root: string }> {
+): Promise<{ url: string; root: string; port: number }> {
   const root = tempDir();
   writeFile(root, 'gms.config.yaml', 'project:\n  name: test\n');
   const config = loadConfig({ cwd: root, env: {} });
@@ -43,9 +43,11 @@ async function serve(
       allowConfigWrite: options.allowConfigWrite,
     }),
     ...(options.allowControl !== undefined && { allowControl: options.allowControl }),
+    // Never the real seeds/ folder: a test must not rewrite the project's lists.
+    seedsDir: path.join(root, 'seeds'),
   });
   running.push(server);
-  return { url: server.url, root };
+  return { url: server.url, root, port: Number(new URL(server.url).port) };
 }
 
 describe('dashboard server', () => {
@@ -393,5 +395,129 @@ describe('task controls', () => {
 
     expect(body.file).toContain(path.join(root, 'data', 'uploads'));
     expect(body.file).not.toContain('..');
+  });
+});
+
+describe('cities and services', () => {
+  const post = (url: string, body: unknown) =>
+    fetch(`${url}/api/seeds`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+
+  it('lists both kinds on an empty database', async () => {
+    const { url } = await serve();
+    expect(await (await fetch(`${url}/api/seeds?kind=cities`)).json()).toEqual([]);
+    expect(await (await fetch(`${url}/api/seeds?kind=categories`)).json()).toEqual([]);
+  });
+
+  it('refuses edits without --control', async () => {
+    const { url } = await serve();
+    const response = await post(url, { kind: 'category', op: 'add', values: { name: 'Plumber' } });
+    expect(response.status).toBe(403);
+    expect((await fetch(`${url}/api/seeds/save`, { method: 'POST' })).status).toBe(403);
+  });
+
+  it('adds, pauses and deletes, reporting each step', async () => {
+    const { url } = await serve({ allowControl: true });
+    const added = (await (
+      await post(url, {
+        kind: 'city',
+        op: 'add',
+        values: { city: 'Atlanta', stateCode: 'GA', zip: '30303', coordinates: '33.75, -84.39' },
+      })
+    ).json()) as { id: number };
+
+    expect((await post(url, { kind: 'city', op: 'pause', id: added.id })).status).toBe(200);
+    const rows = (await (await fetch(`${url}/api/seeds?kind=cities`)).json()) as {
+      progress: string;
+    }[];
+    expect(rows.map((r) => r.progress)).toEqual(['paused']);
+
+    expect(await (await post(url, { kind: 'city', op: 'delete', id: added.id })).json()).toEqual({
+      jobsRemoved: 0,
+    });
+  });
+
+  it('answers a refused edit with the reason and what to do instead', async () => {
+    const { url } = await serve({ allowControl: true });
+    const response = await post(url, { kind: 'city', op: 'add', values: { city: 'Nowhere' } });
+    expect(response.status).toBe(400);
+    expect(((await response.json()) as { error: string }).error).toMatch(/zip/);
+  });
+
+  it('refuses an operation that does not exist', async () => {
+    const { url } = await serve({ allowControl: true });
+    expect((await post(url, { kind: 'city', op: 'drop', id: 1 })).status).toBe(400);
+    expect((await post(url, { kind: 'jobs', op: 'delete', id: 1 })).status).toBe(400);
+  });
+
+  it('saves the lists to the seeds folder it was given', async () => {
+    const { url, root } = await serve({ allowControl: true });
+    await post(url, { kind: 'category', op: 'add', values: { name: 'Plumber' } });
+    const response = await fetch(`${url}/api/seeds/save`, { method: 'POST' });
+    expect(await response.json()).toMatchObject({ cities: 0, categories: 1 });
+    expect(fs.readFileSync(path.join(root, 'seeds', 'services.csv'), 'utf8')).toContain('Plumber');
+  });
+});
+
+describe('requests from other websites', () => {
+  // Loopback keeps other machines out, not other pages in the same browser. A
+  // cross-site text/plain POST skips the CORS preflight entirely.
+  it('refuses a write that another origin sent', async () => {
+    const { url } = await serve({ allowControl: true });
+    const response = await fetch(`${url}/api/jobs/retry`, {
+      method: 'POST',
+      headers: { origin: 'https://evil.example', 'content-type': 'text/plain' },
+    });
+    expect(response.status).toBe(403);
+  });
+
+  it('refuses a write the browser marks as cross-site', async () => {
+    const { url } = await serve({ allowControl: true });
+    const response = await fetch(`${url}/api/jobs/retry`, {
+      method: 'POST',
+      headers: { 'sec-fetch-site': 'cross-site' },
+    });
+    expect(response.status).toBe(403);
+  });
+
+  it('allows a write from its own page', async () => {
+    const { url } = await serve({ allowControl: true });
+    const response = await fetch(`${url}/api/jobs/retry`, {
+      method: 'POST',
+      headers: { origin: url, 'sec-fetch-site': 'same-origin' },
+    });
+    expect(response.status).toBe(200);
+  });
+
+  it('refuses any request addressed to another host name (DNS rebinding)', async () => {
+    const { port } = await serve();
+    // fetch() will not let a caller override Host, so speak HTTP directly.
+    const http = await import('node:http');
+    const status = await new Promise<number | undefined>((resolve, reject) => {
+      http
+        .get(
+          {
+            host: '127.0.0.1',
+            port,
+            path: '/api/leads',
+            headers: { host: `evil.example:${port}` },
+          },
+          (res) => {
+            res.resume();
+            resolve(res.statusCode);
+          },
+        )
+        .on('error', reject);
+    });
+    expect(status).toBe(403);
+  });
+
+  it('only lists sheets of files the page uploaded', async () => {
+    const { url } = await serve({ allowControl: true });
+    const response = await fetch(`${url}/api/sheets?file=${encodeURIComponent('/etc/hosts')}`);
+    expect(response.status).toBe(400);
   });
 });

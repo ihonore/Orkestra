@@ -23,6 +23,8 @@ import { runUi } from './commands/ui.js';
 import { runImportCategories, runImportCities, runListSheets } from './commands/import.js';
 import { runInit } from './commands/init.js';
 import { runPlan } from './commands/plan.js';
+import { runQueue } from './commands/queue.js';
+import { runSeedsLoad, runSeedsSave } from './commands/seeds.js';
 import { runRun } from './commands/run.js';
 import { runJobsList, runJobsRetry, runStatus } from './commands/status.js';
 import { style, symbol } from './output.js';
@@ -218,6 +220,56 @@ export function buildProgram(): Command {
     .argument('<file>', 'path to the .xlsx file')
     .action(async (file: string) => {
       await runListSheets(file);
+    });
+
+  program
+    .command('queue')
+    .description('show or change which searches run first (spread across states by default)')
+    .addOption(
+      new Option(
+        '--order <order>',
+        'spread: round-robin across states; by-state: one at a time',
+      ).choices(['spread', 'by-state']),
+    )
+    .option('--states <list>', 'comma-separated state codes to favour; "" clears them')
+    .option('--only', 'search only --states; the rest wait as paused')
+    .option('--all', 'search every state again (undoes --only)')
+    .option('--json', 'emit machine-readable output', false)
+    .action(
+      (options: {
+        order?: 'spread' | 'by-state';
+        states?: string;
+        only?: boolean;
+        all?: boolean;
+        json: boolean;
+      }) => {
+        runQueue({
+          config: configFrom(program),
+          ...(options.order !== undefined && { order: options.order }),
+          ...(options.states !== undefined && { states: options.states }),
+          ...(options.only === true && { only: true }),
+          ...(options.all === true && { only: false }),
+          json: options.json,
+        });
+      },
+    );
+
+  const seedsCmd = program
+    .command('seeds')
+    .description('the city and service lists committed in seeds/');
+  seedsCmd
+    .command('load')
+    .description('add or update cities and services from seeds/ (never deletes)')
+    .option('--json', 'emit machine-readable output', false)
+    .action((options: { json: boolean }) => {
+      runSeedsLoad({ config: configFrom(program), json: options.json });
+    });
+  seedsCmd
+    .command('save')
+    .description("write the database's cities and services to seeds/, ready to commit")
+    .option('--json', 'emit machine-readable output', false)
+    .action((options: { json: boolean }) => {
+      runSeedsSave({ config: configFrom(program), json: options.json });
     });
 
   program

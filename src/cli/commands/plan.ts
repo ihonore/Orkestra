@@ -11,6 +11,7 @@ import { planGoogleMapsJobs } from '../../core/engine/planner.js';
 import { openDatabaseFromConfig } from '../../db/client.js';
 import { JobsRepository } from '../../db/repositories/jobs.js';
 import { CategoriesRepository, CitiesRepository } from '../../db/repositories/seeds.js';
+import { syncQueue } from '../../seeds/queue.js';
 import { heading, keyValue, style, symbol } from '../output.js';
 
 export interface PlanCommandOptions {
@@ -86,6 +87,9 @@ export function runPlan(options: PlanCommandOptions): void {
     }
 
     const result = jobs.enqueue(specs);
+    // New jobs arrive at the planner's flat priority; give them their place in
+    // the queue order (spread across states, unless the plan says otherwise).
+    if (automationId === 'google-maps') syncQueue(driver);
     const after = jobs.counts(automationId);
 
     if (options.json === true) {

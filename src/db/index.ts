@@ -50,6 +50,7 @@ export {
   type CityRecord,
   type UpsertResult,
 } from './repositories/seeds.js';
+export { SeedJobsRepository, type SeedJobCounts, type SeedKind } from './repositories/seed-jobs.js';
 export {
   BaseRepository,
   type Repository,

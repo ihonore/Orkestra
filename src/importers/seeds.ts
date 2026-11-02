@@ -8,6 +8,7 @@
 import type { CategoryInput, CityInput } from '../db/repositories/seeds.js';
 import { ImportError } from '../core/errors/taxonomy.js';
 import {
+  cleanActive,
   cleanNumber,
   cleanText,
   isValidLatitude,
@@ -88,6 +89,7 @@ export function parseCityRows(rows: SheetRows, source: string): ParsedCities {
   const cLng = column(header, 'longitude', 'lng', 'lon', 'long');
   const cPopulation = column(header, 'population', 'pop');
   const cStatus = column(header, 'status');
+  const cActive = column(header, 'active');
 
   const missing: string[] = [];
   if (cZip === null) missing.push('ZipCode');
@@ -159,7 +161,9 @@ export function parseCityRows(rows: SheetRows, source: string): ParsedCities {
       continue;
     }
 
+    const active = cleanActive(at(cActive));
     cities.push({
+      ...(active !== undefined && { active }),
       zip,
       city,
       state: state ?? stateCode,
@@ -203,6 +207,7 @@ export function parseCategoryRows(rows: SheetRows): ParsedCategories {
   const cStatus = column(header, 'status');
   const cWeight = column(header, 'weight', 'priority');
   const cAliases = column(header, 'aliases', 'alternates');
+  const cActive = column(header, 'active');
 
   const categories: CategoryInput[] = [];
   const rejected: RejectedRow[] = [];
@@ -238,7 +243,9 @@ export function parseCategoryRows(rows: SheetRows): ParsedCategories {
             .map((a) => a.trim())
             .filter((a) => a !== '');
 
+    const active = cleanActive(cActive === null ? null : row[cActive]);
     categories.push({
+      ...(active !== undefined && { active }),
       name,
       slug,
       aliases,

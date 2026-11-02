@@ -18,7 +18,22 @@ import type { ResolvedConfig } from '../config/schema.js';
 import { ConfigSchema } from '../config/schema.js';
 import { openDatabaseFromConfig } from '../db/client.js';
 import { JobsRepository } from '../db/repositories/jobs.js';
+import type { SeedKind } from '../db/repositories/seed-jobs.js';
+import { errorMessage, isAppError } from '../core/errors/taxonomy.js';
 import type { Logger } from '../core/logging/logger.js';
+import { saveSeedFiles } from '../seeds/bundled.js';
+import { queueView, setQueuePlan, syncQueue } from '../seeds/queue.js';
+import {
+  addCategory,
+  addCity,
+  listCategories,
+  listCities,
+  removeSeed,
+  setSeedActive,
+  updateCategory,
+  updateCity,
+  type SeedForm,
+} from '../seeds/manage.js';
 import { safeSegment } from '../core/util/paths.js';
 import { PAGE } from './page.js';
 import * as api from './api.js';
@@ -34,6 +49,8 @@ export interface UiServerOptions {
   /** Let the page start and stop scrapes, imports and exports. */
   readonly allowControl?: boolean;
   readonly configFile?: string;
+  /** Where "Save to seeds/" writes. Defaults to the project's own seeds/ folder. */
+  readonly seedsDir?: string;
 }
 
 /**
@@ -261,6 +278,66 @@ function writeLocalConfig(
   return { ok: true };
 }
 
+/**
+ * Whether a request really comes from this dashboard's own page.
+ *
+ * Binding to loopback keeps other *machines* out, but not other *websites*: any
+ * page open in the same browser can send requests to 127.0.0.1. Two checks
+ * close that:
+ *
+ *  - The Host header must name this server. A DNS-rebinding page arrives as
+ *    `Host: attacker.example:4600` and is refused, so it can never read leads.
+ *  - A write must not come from another origin. A cross-site `fetch` with a
+ *    `text/plain` body is a "simple request" that skips the CORS preflight,
+ *    and the body parser here does not care about content types — so without
+ *    this, any website could start a scrape or rewrite the config.
+ *
+ * Tools such as curl send neither Origin nor Sec-Fetch-Site and are allowed:
+ * they are not a browser that can be tricked into sending a request.
+ */
+function isSameOrigin(req: http.IncomingMessage, host: string, port: number): boolean {
+  const allowed = new Set([`${host}:${port}`, `127.0.0.1:${port}`, `localhost:${port}`]);
+  const requestHost = req.headers.host ?? '';
+  if (!allowed.has(requestHost)) return false;
+
+  if (req.method === 'GET' || req.method === 'HEAD') return true;
+  const origin = req.headers.origin;
+  if (origin !== undefined && origin !== `http://${requestHost}`) return false;
+  const site = req.headers['sec-fetch-site'];
+  return site === undefined || site === 'same-origin' || site === 'none';
+}
+
+interface SeedRequest {
+  readonly kind?: unknown;
+  readonly op?: unknown;
+  readonly id?: unknown;
+  readonly values?: SeedForm;
+}
+
+/** Apply one seed edit from the dashboard. Throws a SeedError the page can show. */
+function applySeedEdit(driver: ReturnType<typeof openDatabaseFromConfig>, body: SeedRequest) {
+  const kind: SeedKind | null =
+    body.kind === 'city' ? 'city' : body.kind === 'category' ? 'category' : null;
+  if (kind === null) throw new Error(`unknown kind: ${String(body.kind)}`);
+  const id = Number(body.id);
+  const values = body.values ?? {};
+
+  switch (body.op) {
+    case 'add':
+      return kind === 'city' ? addCity(driver, values) : addCategory(driver, values);
+    case 'update':
+      return kind === 'city' ? updateCity(driver, id, values) : updateCategory(driver, id, values);
+    case 'pause':
+      return setSeedActive(driver, kind, id, false);
+    case 'resume':
+      return setSeedActive(driver, kind, id, true);
+    case 'delete':
+      return removeSeed(driver, kind, id);
+    default:
+      throw new Error(`unknown operation: ${String(body.op)}`);
+  }
+}
+
 export interface RunningServer {
   readonly url: string;
   close(): Promise<void>;
@@ -296,8 +373,30 @@ export function startUiServer(options: UiServerOptions): Promise<RunningServer> 
         })
       : null;
 
+  // A queue planned before the order existed has every job at one priority,
+  // which runs it state by state. Order it once at startup so "Next up" is
+  // true from the first look — only with --control, since a viewer must not
+  // write.
+  if (tasks !== null) {
+    const driver = openDatabaseFromConfig(config);
+    try {
+      syncQueue(driver);
+    } catch (error) {
+      options.logger?.warn({ err: String(error) }, 'could not apply the queue order at startup');
+    } finally {
+      driver.close();
+    }
+  }
+
   const server = http.createServer((req, res) => {
     const url = new URL(req.url ?? '/', `http://${host}:${port}`);
+
+    const address = server.address();
+    const actualPort = typeof address === 'object' && address !== null ? address.port : port;
+    if (!isSameOrigin(req, host, actualPort)) {
+      json(res, 403, { error: 'request refused: not from this dashboard' });
+      return;
+    }
 
     // The database is opened per request and closed immediately. A long-lived
     // handle would hold a WAL read lock across an idle browser tab, and a
@@ -501,7 +600,14 @@ export function startUiServer(options: UiServerOptions): Promise<RunningServer> 
 
       /** Sheet names in an uploaded workbook, so the user can pick one. */
       if (url.pathname === '/api/sheets' && req.method === 'GET') {
-        const file = url.searchParams.get('file') ?? '';
+        // Only files the page uploaded. This endpoint opens whatever it is
+        // given, and the rest of the disk is none of the dashboard's business.
+        const uploads = path.resolve(config.paths.dataDir, 'uploads');
+        const file = path.resolve(uploads, url.searchParams.get('file') ?? '');
+        if (path.dirname(file) !== uploads) {
+          json(res, 400, { error: 'only uploaded workbooks can be listed' });
+          return;
+        }
         void import('../importers/xlsx.js')
           .then(({ sheetNames }) => sheetNames(file))
           .then((names) => {
@@ -523,11 +629,92 @@ export function startUiServer(options: UiServerOptions): Promise<RunningServer> 
         }
         const driver = openDatabaseFromConfig(config);
         try {
-          const n = new JobsRepository(driver).retry({ automationId: 'google-maps' });
+          // Failed only. The CLI default also takes `paused`, but here those
+          // are searches of a city or service someone paused on purpose.
+          const n = new JobsRepository(driver).retry({
+            automationId: 'google-maps',
+            status: 'failed',
+          });
+          syncQueue(driver);
           json(res, 200, { retried: n });
         } finally {
           driver.close();
         }
+        return;
+      }
+
+      if (url.pathname === '/api/seeds' && req.method === 'GET') {
+        const kind = url.searchParams.get('kind') === 'categories' ? 'categories' : 'cities';
+        json(
+          res,
+          200,
+          withDb((d) => (kind === 'cities' ? listCities(d) : listCategories(d))),
+        );
+        return;
+      }
+
+      if (url.pathname === '/api/seeds' && req.method === 'POST') {
+        if (tasks === null) {
+          json(res, 403, { error: 'controls are disabled — restart with --control' });
+          return;
+        }
+        readBody(req, (body) => {
+          const driver = openDatabaseFromConfig(config);
+          try {
+            const result = applySeedEdit(driver, body as SeedRequest);
+            options.logger?.info({ edit: body }, 'seed edited from dashboard');
+            json(res, 200, result);
+          } catch (error) {
+            json(res, 400, {
+              error: errorMessage(error),
+              ...(isAppError(error) && error.hint !== undefined && { hint: error.hint }),
+            });
+          } finally {
+            driver.close();
+          }
+        });
+        return;
+      }
+
+      if (url.pathname === '/api/queue' && req.method === 'GET') {
+        json(
+          res,
+          200,
+          withDb((d) => queueView(d)),
+        );
+        return;
+      }
+
+      if (url.pathname === '/api/queue' && req.method === 'POST') {
+        if (tasks === null) {
+          json(res, 403, { error: 'controls are disabled — restart with --control' });
+          return;
+        }
+        readBody(req, (body) => {
+          const driver = openDatabaseFromConfig(config);
+          try {
+            const result = setQueuePlan(driver, body as Record<string, unknown>);
+            options.logger?.info({ plan: result.plan }, 'queue plan changed from dashboard');
+            json(res, 200, { ...result, ...queueView(driver) });
+          } catch (error) {
+            json(res, 400, { error: errorMessage(error) });
+          } finally {
+            driver.close();
+          }
+        });
+        return;
+      }
+
+      if (url.pathname === '/api/seeds/save' && req.method === 'POST') {
+        if (tasks === null) {
+          json(res, 403, { error: 'controls are disabled — restart with --control' });
+          return;
+        }
+        json(
+          res,
+          200,
+          withDb((d) => saveSeedFiles(d, options.seedsDir)),
+        );
         return;
       }
 

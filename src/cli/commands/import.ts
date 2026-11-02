@@ -15,6 +15,7 @@ import {
   type RejectedRow,
 } from '../../importers/seeds.js';
 import { sheetNames } from '../../importers/xlsx.js';
+import { refreshAllJobs } from '../../seeds/manage.js';
 import { heading, keyValue, style, symbol } from '../output.js';
 
 export interface ImportCommandOptions {
@@ -87,6 +88,9 @@ export async function runImportCities(options: ImportCommandOptions): Promise<vo
   const driver = openDatabaseFromConfig(options.config);
   try {
     const result = new CitiesRepository(driver).upsertMany(parsed.cities);
+    // A corrected row must reach the searches already queued for it, not only
+    // the ones planned from now on.
+    const refreshed = result.updated > 0 ? refreshAllJobs(driver) : 0;
     if (options.json === true) return;
 
     console.log(
@@ -95,6 +99,7 @@ export async function runImportCities(options: ImportCommandOptions): Promise<vo
         ['inserted', String(result.inserted)],
         ['updated', String(result.updated)],
         ['skipped', String(parsed.rejected.length)],
+        ...(refreshed > 0 ? [['queued jobs refreshed', String(refreshed)] as const] : []),
       ]),
     );
     reportRepairs(parsed.repairs);
@@ -133,6 +138,9 @@ export async function runImportCategories(options: ImportCommandOptions): Promis
   const driver = openDatabaseFromConfig(options.config);
   try {
     const result = new CategoriesRepository(driver).upsertMany(parsed.categories);
+    // A corrected row must reach the searches already queued for it, not only
+    // the ones planned from now on.
+    const refreshed = result.updated > 0 ? refreshAllJobs(driver) : 0;
     if (options.json === true) return;
 
     console.log(
@@ -141,6 +149,7 @@ export async function runImportCategories(options: ImportCommandOptions): Promis
         ['inserted', String(result.inserted)],
         ['updated', String(result.updated)],
         ['skipped', String(parsed.rejected.length)],
+        ...(refreshed > 0 ? [['queued jobs refreshed', String(refreshed)] as const] : []),
       ]),
     );
     reportRejected(parsed.rejected);

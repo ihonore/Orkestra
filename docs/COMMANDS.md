@@ -11,21 +11,27 @@ touches, whether it is safe to re-run, and where it will surprise you.
 
 ## The short path
 
-Seven commands, in the order you use them. Everything else is inspection or
+Six commands, in the order you use them. Everything else is inspection or
 maintenance.
 
 ```bash
 gms init                                    # 1. create gms.config.yaml and data/
-gms db migrate                              # 2. create the database
-gms import cities  leads.xlsx --sheet Cities
-gms import categories leads.xlsx --sheet Services   # 3. load the seed lists
-gms plan                                    # 4. build the queue of searches
-gms run                                     # 5. scrape Google Maps
-gms enrich emails                           # 6. find addresses on their websites
-gms export sheets                           # 7. publish to the team's sheet
+gms db migrate                              # 2. create the database and load seeds/
+gms plan                                    # 3. build the queue of searches
+gms run                                     # 4. scrape Google Maps
+gms enrich emails                           # 5. find addresses on their websites
+gms export sheets                           # 6. publish to the team's sheet
 ```
 
-Steps 4–7 are all safe to re-run. `plan` skips searches it already created,
+The 185 cities and 85 services ship in the committed `seeds/` folder, and the
+first `gms db migrate` loads them, so there is nothing to import. To use a
+different list, see [Seed data](#seed-data).
+
+The queue spreads across states by default, so early leads come from
+everywhere. `gms queue --states TX,FL` (or step 3 in the dashboard) puts chosen
+states first.
+
+Steps 3–6 are all safe to re-run. `plan` skips searches it already created,
 `run` resumes where it stopped, `enrich` skips sites crawled in the last 90
 days, and the exports only send what is new.
 
@@ -40,13 +46,13 @@ These belong to `gms` itself, so they work with any command and may go **before
 or after** the subcommand — `gms -c alt.yaml status` and `gms status -c alt.yaml`
 are the same.
 
-| Flag | Meaning |
-| --- | --- |
-| `-c, --config <path>` | Config file to read. Default: look in the **current directory** for `gms.config.yaml`, then `.yml`, then `.json` |
-| `--data-dir <path>` | Override `project.dataDir` for this one invocation |
-| `--log-level <level>` | `trace` \| `debug` \| `info` \| `warn` \| `error` \| `fatal` |
-| `-v, --version` | Print the version and exit — including after a subcommand, so `gms run -v` prints the version instead of running |
-| `-h, --help` | Usage for the command it follows |
+| Flag                    | Meaning                                                                                                                     |
+| ----------------------- | --------------------------------------------------------------------------------------------------------------------------- |
+| `-c, --config <path>` | Config file to read. Default: look in the**current directory** for `gms.config.yaml`, then `.yml`, then `.json` |
+| `--data-dir <path>`   | Override`project.dataDir` for this one invocation                                                                         |
+| `--log-level <level>` | `trace` \| `debug` \| `info` \| `warn` \| `error` \| `fatal`                                                    |
+| `-v, --version`       | Print the version and exit — including after a subcommand, so`gms run -v` prints the version instead of running          |
+| `-h, --help`          | Usage for the command it follows                                                                                            |
 
 Three things about config discovery that cost real time when you don't know them:
 
@@ -73,9 +79,9 @@ are `gms import sheets`, `gms jobs retry`, `gms db check`, `gms db vacuum` and
 Writes the starter `gms.config.yaml` and creates `data/`, `data/logs/`,
 `data/artifacts/` and `data/exports/`.
 
-| Flag | Default | Meaning |
-| --- | --- | --- |
-| `-f, --force` | off | Overwrite an existing config with the stock template |
+| Flag            | Default | Meaning                                              |
+| --------------- | ------- | ---------------------------------------------------- |
+| `-f, --force` | off     | Overwrite an existing config with the stock template |
 
 - Writes into the directory you are standing in. `-c` and `--data-dir` are
   accepted here but **ignored** — `cd` to the folder you want set up first.
@@ -95,13 +101,13 @@ Writes the starter `gms.config.yaml` and creates `data/`, `data/logs/`,
 
 Checks what a long run depends on before you start one.
 
-| Flag | Default | Meaning |
-| --- | --- | --- |
-| `--proxies` | off | Probe every proxy, report egress IP, geo and latency |
-| `--browser` | off | Launch Chromium to prove it works |
-| `--sheets` | off | Verify Google Sheets credentials and access |
-| `--all` | off | All of the above |
-| `--json` | off | Machine-readable report |
+| Flag          | Default | Meaning                                              |
+| ------------- | ------- | ---------------------------------------------------- |
+| `--proxies` | off     | Probe every proxy, report egress IP, geo and latency |
+| `--browser` | off     | Launch Chromium to prove it works                    |
+| `--sheets`  | off     | Verify Google Sheets credentials and access          |
+| `--all`     | off     | All of the above                                     |
+| `--json`    | off     | Machine-readable report                              |
 
 - **A bare `gms doctor` does not test the browser, the proxies or Sheets.**
   Those three are opt-in because each costs seconds. Use `--all` before a real
@@ -124,10 +130,10 @@ Checks what a long run depends on before you start one.
 Prints the settings actually in force after stacking defaults → `gms.config.yaml`
 → `gms.config.local.yaml` → `GMS_*` environment variables → flags.
 
-| Flag | Default | Meaning |
-| --- | --- | --- |
-| `--resolved` | off | Also print resolved paths, the layers that contributed, and a config fingerprint |
-| `--json` | off | JSON instead of YAML |
+| Flag           | Default | Meaning                                                                          |
+| -------------- | ------- | -------------------------------------------------------------------------------- |
+| `--resolved` | off     | Also print resolved paths, the layers that contributed, and a config fingerprint |
+| `--json`     | off     | JSON instead of YAML                                                             |
 
 - Completely read-only — no database, no files, no network. Safe mid-scrape.
 - `--resolved` is the fastest way to answer "which database is this actually
@@ -144,6 +150,62 @@ Prints the settings actually in force after stacking defaults → `gms.config.ya
 
 ## Seed data
 
+The city and service lists live in two places, on purpose:
+
+- **`seeds/cities.csv` and `seeds/services.csv`**, committed with the code. They
+  are where a *new* database starts, so a fresh checkout on another machine
+  (the Windows VPS, say) has the lists without carrying the spreadsheet over.
+- **The database**, which is the working copy. The dashboard's **Cities** and
+  **Services** pages add, edit, pause and delete rows here, and show how many
+  of each row's searches are done.
+
+The two do not sync on their own. Edits made in the dashboard stay in that
+machine's database until you run `gms seeds save` (or click **Save to seeds/**)
+and commit the folder.
+
+### `gms seeds load` · `gms seeds save`
+
+`load` upserts `seeds/` into the database. `save` writes the database's lists,
+paused rows included, back to `seeds/`.
+
+| Flag     | Default | Meaning                 |
+| -------- | ------- | ----------------------- |
+| `--json` | off     | Machine-readable output |
+
+- `gms db migrate` runs the equivalent of `load` **once per database**, and only
+  into empty tables. An existing database is never overwritten, and deleting
+  every city on purpose is not undone by the next migrate.
+- `load` matches rows by zip and service name, like `gms import`. It adds and
+  updates, **never deletes**, and never changes whether an existing row is
+  paused. The files' `Active` column is applied only to rows it inserts.
+- `save` writes both files every time, sorted by state and city, so the git
+  diff shows exactly what changed. Each file is written to a temporary name and
+  renamed, so an interrupted save cannot leave half a file behind.
+- `save` writes into the installation's own `seeds/` folder, wherever `gms` was
+  run from.
+
+### Editing in the dashboard
+
+The **Cities** and **Services** pages (`gms ui --control`) list every row with
+its searches done out of planned, leads found, last search and status.
+
+- **Add** a city with its zip, state code and coordinates, pasted as
+  `latitude, longitude`. That is what Google Maps copies when you right-click
+  the city and click the numbers. Once a queue exists, the new row's searches
+  are queued straight away against every active row of the other list.
+- **Edit** rewrites the searches that have not run yet (queued, paused or
+  failed). Finished searches keep what they actually searched.
+- **Pause** parks the row's queued searches as `paused`, so nothing more is
+  searched for it. Resume puts them back in their old place in the queue, and
+  creates any pairs it missed while paused. A pair stays paused while either
+  side is paused.
+- **Delete** removes the row and its planned searches, but only if it never
+  produced a lead. Once it has, deleting is refused and the page says to pause
+  instead, because a lead's origin points at that row.
+- Status is one of: not planned, queued, running, in progress, needs retry
+  (only failed searches left), complete, paused (you paused it), or on hold
+  (active, but outside the states the queue is limited to; see `gms queue`).
+
 ### `gms import sheets <file>`
 
 Lists the tab names inside an `.xlsx`, so you know what to pass to `--sheet`.
@@ -158,11 +220,11 @@ Lists the tab names inside an `.xlsx`, so you know what to pass to `--sheet`.
 
 Load the seed lists that `gms plan` pairs up.
 
-| Flag | Default | Meaning |
-| --- | --- | --- |
-| `-s, --sheet <name>` | first tab | Tab name, or 1-based position |
-| `--dry-run` | off | Parse and report without writing |
-| `--json` | off | Machine-readable output |
+| Flag                   | Default   | Meaning                          |
+| ---------------------- | --------- | -------------------------------- |
+| `-s, --sheet <name>` | first tab | Tab name, or 1-based position    |
+| `--dry-run`          | off       | Parse and report without writing |
+| `--json`             | off       | Machine-readable output          |
 
 - **`--sheet` matters more than it looks.** Without it you get the *first* tab,
   which on the supplied workbook is scraped results, not the city list — so a
@@ -178,9 +240,14 @@ Load the seed lists that `gms plan` pairs up.
 - Matched on ZIP (cities) and slug (categories), so re-importing updates in
   place — the internal row id is preserved and jobs already planned stay
   attached. Re-running reports "inserted 0 / updated N".
+- A corrected row also reaches the searches already queued for it: queued,
+  paused and failed jobs are rewritten, and the count is shown as "queued jobs
+  refreshed". Before this, a fixed coordinate only reached jobs planned later.
+- An optional `Active` column (`yes`/`no`) sets whether a *new* row starts
+  paused. It never changes an existing row.
 - One transaction: Ctrl-C leaves the database exactly as it was.
 - **Rows you delete from the spreadsheet are not deleted here.** Import only adds
-  and updates; retire a city by setting it inactive.
+  and updates; retire a city by pausing it on the Cities page.
 - Re-importing overwrites with blanks too — a column you cleared in Excel clears
   in the database.
 - `--sheet` is silently ignored for `.csv` files, and a numeric `--sheet` is
@@ -195,14 +262,14 @@ Load the seed lists that `gms plan` pairs up.
 Pairs every selected city with every selected category and writes one job per
 pair. 185 cities × 85 categories = 15,725 jobs.
 
-| Flag | Default | Meaning |
-| --- | --- | --- |
-| `-a, --automation <id>` | `google-maps` | Which automation the jobs belong to |
-| `--cities <list>` | every active city | Comma-separated names, ZIPs **or** state codes |
-| `--categories <list>` | every active category | Comma-separated names or slugs |
-| `--limit <n>` | no cap | Keep only the top-priority pairs |
-| `--dry-run` | off | Report what would be created, write nothing |
-| `--json` | off | Machine-readable output |
+| Flag                      | Default               | Meaning                                             |
+| ------------------------- | --------------------- | --------------------------------------------------- |
+| `-a, --automation <id>` | `google-maps`       | Which automation the jobs belong to                 |
+| `--cities <list>`       | every active city     | Comma-separated names, ZIPs**or** state codes |
+| `--categories <list>`   | every active category | Comma-separated names or slugs                      |
+| `--limit <n>`           | no cap                | Keep only the top-priority pairs                    |
+| `--dry-run`             | off                   | Report what would be created, write nothing         |
+| `--json`                | off                   | Machine-readable output                             |
 
 - Writes only to the `jobs` table. No browser, no network — a full 15,725-job
   plan takes about a second.
@@ -227,18 +294,50 @@ gms plan --cities Birmingham,Montgomery --categories Plumber
 gms plan --cities AL --limit 500                    # top 500 Alabama jobs
 ```
 
+### `gms queue`
+
+Shows or changes which searches run first. With no options it only reports
+the plan and the next ten searches.
+
+| Flag              | Default  | Meaning                                                       |
+| ----------------- | -------- | ------------------------------------------------------------- |
+| `--order <order>` | `spread` | `spread`: round-robin across states. `by-state`: one at a time |
+| `--states <list>` | none     | State codes to favour, e.g. `TX,FL,CA`. `""` clears them       |
+| `--only`          | off      | Search only `--states`. The rest wait, shown as "on hold"      |
+| `--all`           | —        | Undo `--only`: search every state again                       |
+| `--json`          | off      | Machine-readable output                                       |
+
+- **Why it exists.** Every job used to have the same priority, so the queue ran
+  in the order `plan` created it: state by state, alphabetically. The first
+  days of a sweep that takes weeks went to Alabama and Alaska only.
+- **`spread`** (the default) gives every state one search per round, rotating
+  through its cities and through the services. The first ~47 searches cover
+  ~47 states with different services. A state with many finished searches
+  starts that many rounds later, so the backlog evens out.
+- **`by-state`** is the old behaviour: finish one state, then the next.
+- **Chosen states** run before the rest (still spread between themselves), or,
+  with `--only`, are the only ones that run. Leaving "only" mode resumes the
+  others. A city or service you paused yourself stays paused in every mode.
+- A service's **weight** still wins over position: a weight-2 service runs
+  everywhere before any weight-1 search.
+- The plan is stored in the database. `gms run`, the dashboard and `gms plan`
+  all apply it, and a change takes effect from the next search a running
+  scrape picks up, with no restart.
+- The dashboard has the same control as step 3 on the Control page, with a
+  "Next up" preview.
+
 ### `gms run`
 
 Works through the queue: opens Chromium, walks the Maps results for each
 search, saves what it finds.
 
-| Flag | Default | Meaning |
-| --- | --- | --- |
-| `-a, --automation <id>` | `google-maps` | Which queue to work |
-| `-w, --workers <n>` | `runtime.workers` (4) | Concurrent browser workers |
-| `-n, --max-jobs <n>` | no limit | Stop after this many searches |
-| `--headful` | off | Show the browser window |
-| `--json` | off | Machine-readable summary |
+| Flag                      | Default                 | Meaning                       |
+| ------------------------- | ----------------------- | ----------------------------- |
+| `-a, --automation <id>` | `google-maps`         | Which queue to work           |
+| `-w, --workers <n>`     | `runtime.workers` (4) | Concurrent browser workers    |
+| `-n, --max-jobs <n>`    | no limit                | Stop after this many searches |
+| `--headful`             | off                     | Show the browser window       |
+| `--json`                | off                     | Machine-readable summary      |
 
 - Only runs jobs `gms plan` already created. An empty queue exits 0 with
   `stopped: queue-empty`.
@@ -288,11 +387,11 @@ gms run --workers 2              # gentler on a small VPS
 
 Visits the websites `gms run` collected and looks for contact addresses.
 
-| Flag | Default | Meaning |
-| --- | --- | --- |
-| `-w, --workers <n>` | `runtime.httpWorkers` (16) | Concurrent HTTP workers |
-| `-n, --max-domains <n>` | no limit | Stop after this many sites |
-| `--json` | off | Machine-readable summary |
+| Flag                      | Default                      | Meaning                    |
+| ------------------------- | ---------------------------- | -------------------------- |
+| `-w, --workers <n>`     | `runtime.httpWorkers` (16) | Concurrent HTTP workers    |
+| `-n, --max-domains <n>` | no limit                     | Stop after this many sites |
+| `--json`                | off                          | Machine-readable summary   |
 
 - No browser — plain HTTP fetches, which is why 16 at once is the default while
   `gms run` uses 4.
@@ -332,13 +431,13 @@ Visits the websites `gms run` collected and looks for contact addresses.
 
 How far the run has got, and roughly how long the rest will take.
 
-| Flag | Default | Meaning |
-| --- | --- | --- |
-| `-a, --automation <id>` | all | Restrict the counts to one automation |
-| `--by <grouping>` | off | Per-group breakdown: `city`, `category` or `state` |
-| `--incomplete` | off | With `--by`, hide groups with nothing left |
-| `-n, --limit <n>` | 1000 | With `--by`, maximum groups to show |
-| `--json` | off | Machine-readable output |
+| Flag                      | Default | Meaning                                                 |
+| ------------------------- | ------- | ------------------------------------------------------- |
+| `-a, --automation <id>` | all     | Restrict the counts to one automation                   |
+| `--by <grouping>`       | off     | Per-group breakdown:`city`, `category` or `state` |
+| `--incomplete`          | off     | With`--by`, hide groups with nothing left             |
+| `-n, --limit <n>`       | 1000    | With`--by`, maximum groups to show                    |
+| `--json`                | off     | Machine-readable output                                 |
 
 - Read-only for your data, and safe to run while a scrape is in progress —
   SQLite readers don't block the writer.
@@ -354,13 +453,13 @@ How far the run has got, and roughly how long the rest will take.
 
 ### `gms jobs list`
 
-| Flag | Default | Meaning |
-| --- | --- | --- |
-| `-a, --automation <id>` | all | Restrict to one automation |
-| `-s, --status <status>` | all | `pending`, `leased`, `done`, `failed`, `skipped`, `paused` |
-| `--error-kind <kind>` | all | e.g. `lease_expired`, `blocked` |
-| `-n, --limit <n>` | 50 | Maximum rows |
-| `--json` | off | Machine-readable output |
+| Flag                      | Default | Meaning                                                                |
+| ------------------------- | ------- | ---------------------------------------------------------------------- |
+| `-a, --automation <id>` | all     | Restrict to one automation                                             |
+| `-s, --status <status>` | all     | `pending`, `leased`, `done`, `failed`, `skipped`, `paused` |
+| `--error-kind <kind>`   | all     | e.g.`lease_expired`, `blocked`                                     |
+| `-n, --limit <n>`       | 50      | Maximum rows                                                           |
+| `--json`                | off     | Machine-readable output                                                |
 
 Read-only. `gms jobs list --status failed --error-kind blocked` is the fastest
 way to tell "Google is rate-limiting me" from "this selector broke".
@@ -369,9 +468,9 @@ way to tell "Google is rate-limiting me" from "this selector broke".
 
 Puts failed or paused searches back in the queue.
 
-| Flag | Default | Meaning |
-| --- | --- | --- |
-| `-a, --automation <id>` | all | Restrict to one automation |
+| Flag                      | Default                   | Meaning                           |
+| ------------------------- | ------------------------- | --------------------------------- |
+| `-a, --automation <id>` | all                       | Restrict to one automation        |
 | `-s, --status <status>` | `failed` and `paused` | Retry jobs in this status instead |
 
 - **This one changes your data.** Per job it resets status to pending, attempts
@@ -388,6 +487,9 @@ Puts failed or paused searches back in the queue.
   and exits 0.
 - Retried jobs go to the **back** of the queue: they are stamped with the current
   time, and at equal priority the oldest scheduled job wins.
+- Searches of a **paused city or service stay paused**: they are parked again
+  straight after the retry, and the command says how many. Resume the city or
+  service to run them. The dashboard's "Retry all failed" retries `failed` only.
 - Resetting attempts to 0 is the point and also the risk — a job that failed
   three times for a permanent reason will now fail three more.
 - No `--json`.
@@ -397,12 +499,12 @@ Puts failed or paused searches back in the queue.
 A local web page showing progress, leads, failures and exports — and, with
 `--control`, buttons that run the commands for you.
 
-| Flag | Default | Meaning |
-| --- | --- | --- |
-| `-p, --port <n>` | 4600 | Port to listen on |
-| `--no-open` | off | Don't open a browser window |
-| `--control` | off | Let the page start scrapes, imports and exports, and edit settings |
-| `--allow-config-write` | off | Edit settings only, without task controls |
+| Flag                     | Default | Meaning                                                            |
+| ------------------------ | ------- | ------------------------------------------------------------------ |
+| `-p, --port <n>`       | 4600    | Port to listen on                                                  |
+| `--no-open`            | off     | Don't open a browser window                                        |
+| `--control`            | off     | Let the page start scrapes, imports and exports, and edit settings |
+| `--allow-config-write` | off     | Edit settings only, without task controls                          |
 
 - Occupies the terminal until Ctrl-C. The first four lines tell you the URL, the
   exact database file, and whether controls and settings are enabled — read
@@ -410,6 +512,15 @@ A local web page showing progress, leads, failures and exports — and, with
 - **Binds to 127.0.0.1 only, and has no password.** That is the trade: the page
   shows names, phone numbers and addresses and can edit settings, so it is never
   reachable from another machine. Do not put it behind a public proxy.
+- It also refuses requests from **other websites** open in the same browser. A
+  request whose `Host` is not this server is refused, which defeats DNS
+  rebinding. So is a write whose `Origin` or `Sec-Fetch-Site` says it came from
+  another site. Before this, any page you visited could start a scrape or
+  rewrite settings with a plain `text/plain` POST. curl and scripts send neither
+  header and still work.
+- On a VPS, open it from a browser on the VPS itself (over Remote Desktop), or
+  tunnel the port: `ssh -L 4600:127.0.0.1:4600 you@vps`, then browse to
+  `http://127.0.0.1:4600` locally.
 - Reads open the database read-only and close immediately, so leaving it open for
   days won't block a running scrape.
 - Buttons launch real `gms` commands as separate processes from a fixed
@@ -437,16 +548,16 @@ from a stored position, so running them repeatedly only sends what is new.
 
 ### `gms export csv`
 
-| Flag | Default | Meaning |
-| --- | --- | --- |
-| `-e, --entity <name>` | `leads-flat` | `leads-flat`, `businesses` or `emails` |
-| `-o, --out-dir <path>` | `<dataDir>/exports` | Where to write |
-| `--full` | off | Re-export everything, replacing the file |
-| `--split-by <column>` | off | One file per value, e.g. `state` |
-| `--excel-safe` | off | Wrap zips and phones as `="01234"` |
-| `--no-bom` | BOM written | Omit the UTF-8 byte-order mark |
-| `--crlf` | `\n` | Windows line endings |
-| `--json` | off | Machine-readable output |
+| Flag                     | Default               | Meaning                                      |
+| ------------------------ | --------------------- | -------------------------------------------- |
+| `-e, --entity <name>`  | `leads-flat`        | `leads-flat`, `businesses` or `emails` |
+| `-o, --out-dir <path>` | `<dataDir>/exports` | Where to write                               |
+| `--full`               | off                   | Re-export everything, replacing the file     |
+| `--split-by <column>`  | off                   | One file per value, e.g.`state`            |
+| `--excel-safe`         | off                   | Wrap zips and phones as`="01234"`          |
+| `--no-bom`             | BOM written           | Omit the UTF-8 byte-order mark               |
+| `--crlf`               | `\n`                | Windows line endings                         |
+| `--json`               | off                   | Machine-readable output                      |
 
 - Appends, so a run that dies halfway leaves a valid file and the next run
   continues. `--full` replaces the file instead, because restarting the position
@@ -463,13 +574,13 @@ from a stored position, so running them repeatedly only sends what is new.
 
 ### `gms export sheets`
 
-| Flag | Default | Meaning |
-| --- | --- | --- |
-| `-e, --entity <name>` | `leads-flat` | `leads-flat`, `businesses` or `emails` |
-| `-s, --spreadsheet-id <id>` | `exporters.sheets.spreadsheetId` | From the sheet URL |
-| `-t, --tab <name>` | `exporters.sheets.sheetName` (`Leads`) | Tab to append to |
-| `--full` | off | Re-send everything |
-| `--json` | off | Machine-readable output |
+| Flag                          | Default                                    | Meaning                                      |
+| ----------------------------- | ------------------------------------------ | -------------------------------------------- |
+| `-e, --entity <name>`       | `leads-flat`                             | `leads-flat`, `businesses` or `emails` |
+| `-s, --spreadsheet-id <id>` | `exporters.sheets.spreadsheetId`         | From the sheet URL                           |
+| `-t, --tab <name>`          | `exporters.sheets.sheetName` (`Leads`) | Tab to append to                             |
+| `--full`                    | off                                        | Re-send everything                           |
+| `--json`                    | off                                        | Machine-readable output                      |
 
 - Cells are sent with explicit types, so a ZIP of `02108` and a 20-digit CID
   survive. `valueInputOption: RAW` is the usual advice and it does not work.
@@ -501,13 +612,16 @@ found *after* a business was exported still reach the sheet.
 
 ## Database maintenance
 
-| Command | What it does |
-| --- | --- |
-| `gms db migrate [--dry-run]` | Apply pending migrations. Idempotent; `--dry-run` lists what would run |
-| `gms db status [--json]` | Database file, size, WAL mode, applied and pending migrations |
-| `gms db check` | Full `PRAGMA integrity_check`. Slow on a large database |
-| `gms db vacuum` | Compact and reclaim free pages |
-| `gms db backup <destination>` | Consistent copy, safe while the database is in use |
+| Command                         | What it does                                                            |
+| ------------------------------- | ----------------------------------------------------------------------- |
+| `gms db migrate [--dry-run]`  | Apply pending migrations. Idempotent;`--dry-run` lists what would run |
+| `gms db status [--json]`      | Database file, size, WAL mode, applied and pending migrations           |
+| `gms db check`                | Full`PRAGMA integrity_check`. Slow on a large database                |
+| `gms db vacuum`               | Compact and reclaim free pages                                          |
+| `gms db backup <destination>` | Consistent copy, safe while the database is in use                      |
+
+The first `gms db migrate` on a new database also loads `seeds/` (see
+[Seed data](#seed-data)).
 
 Use `gms db backup`, never `cp`: copying an open SQLite database picks up the
 `-wal` and `-shm` sidecars inconsistently and yields a file that may not open.
@@ -588,15 +702,15 @@ so that anyone comparing against an older build knows what changed.
 
 Not `gms` commands; run with `npm run`.
 
-| Script | What it does |
-| --- | --- |
-| `npm run build` | Compile to `dist/`. Required before the `gms` binary exists |
-| `npm run gms -- <args>` | Run the CLI from source without building |
-| `npm test` / `npm run test:watch` | Vitest |
-| `npm run typecheck` | `tsc --noEmit` |
-| `npm run lint` / `lint:fix` | ESLint |
-| `npm run format` / `format:check` | Prettier |
-| `npm run boundaries` | dependency-cruiser module boundary rules |
-| `npm run check` | typecheck + lint + boundaries + test |
+| Script                                | What it does                                                   |
+| ------------------------------------- | -------------------------------------------------------------- |
+| `npm run build`                     | Compile to`dist/`. Required before the `gms` binary exists |
+| `npm run gms -- <args>`             | Run the CLI from source without building                       |
+| `npm test` / `npm run test:watch` | Vitest                                                         |
+| `npm run typecheck`                 | `tsc --noEmit`                                               |
+| `npm run lint` / `lint:fix`       | ESLint                                                         |
+| `npm run format` / `format:check` | Prettier                                                       |
+| `npm run boundaries`                | dependency-cruiser module boundary rules                       |
+| `npm run check`                     | typecheck + lint + boundaries + test                           |
 
 To install `gms` on your PATH: `npm run build && npm link`.

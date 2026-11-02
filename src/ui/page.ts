@@ -255,6 +255,8 @@ export const PAGE = String.raw`<!doctype html>
     font-family: var(--sans); letter-spacing: .04em; white-space: nowrap;
   }
   .go.ghost { background: transparent; color: var(--dim); border: 1px solid var(--rule); }
+  a.go { display: inline-block; text-decoration: none; }
+  a.go.ghost:hover { color: var(--ink); border-color: var(--amber); }
   .go.stop { background: var(--rust); color: #fff; }
   .go:disabled { opacity: .35; cursor: not-allowed; }
 
@@ -274,6 +276,53 @@ export const PAGE = String.raw`<!doctype html>
     word-break: break-word; font-size: 11.5px; line-height: 1.65; margin: 0;
   }
 
+  /* ── Cities and services ───────────────────────────────────────────── */
+  .meter {
+    display: inline-block; vertical-align: middle;
+    width: 90px; height: 6px; margin-right: 9px;
+    background: var(--panel-2); border: 1px solid var(--rule-soft);
+  }
+  .meter i { display: block; height: 100%; background: var(--amber); opacity: .7; }
+  .meter.full i { background: var(--verdigris); }
+  tr.off td { color: var(--faint); }
+  tr.off td.nm { text-decoration: line-through; text-decoration-color: var(--rule); }
+  .tag.complete { color: var(--verdigris); }
+  .tag.running, .tag.in-progress { color: var(--amber); }
+  .tag.queued, .tag.not-planned { color: var(--dim); }
+  .tag.paused, .tag.on-hold { color: var(--faint); }
+  .tag.needs-retry { color: var(--rust); }
+  .acts { white-space: nowrap; text-align: right; }
+  .act {
+    background: none; border: 0; padding: 0 0 0 13px; cursor: pointer;
+    color: var(--dim); font: 500 11px/1 var(--sans); letter-spacing: .05em;
+  }
+  .act:hover { color: var(--amber); }
+  .act.danger:hover { color: var(--rust); }
+  .spacer { flex: 1; }
+  .editor {
+    border: 1px solid var(--amber); background: var(--panel);
+    padding: 15px 17px; margin-bottom: 15px;
+  }
+  .editor .opts { display: flex; gap: 11px; flex-wrap: wrap; align-items: flex-end; }
+  .editor label { display: flex; flex-direction: column; gap: 6px; }
+  .editor label span { font: 500 10px/1 var(--sans); letter-spacing: .08em; text-transform: uppercase; color: var(--faint); }
+  .editor input {
+    background: var(--panel-2); border: 1px solid var(--rule); padding: 7px 10px;
+  }
+  .editor input::placeholder { color: var(--faint); }
+  .editor .p { color: var(--faint); font-size: 11px; margin-top: 10px; }
+  .step details { margin-top: 13px; }
+  .states { gap: 5px; }
+  .chip.st { padding: 6px 8px; min-width: 52px; text-align: left; }
+  .chip.st small {
+    display: block; margin-top: 4px;
+    font: 400 9px/1 var(--mono); letter-spacing: 0; text-transform: none; color: var(--faint);
+  }
+  .next { margin: 8px 0 0; padding-left: 22px; color: var(--ink); font-size: 12px; columns: 2; column-gap: 34px; }
+  .next li { margin-bottom: 3px; }
+  .step summary { cursor: pointer; color: var(--dim); font: 500 12px/1.4 var(--sans); }
+  .step summary:hover { color: var(--ink); }
+
   @media (max-width: 820px) {
     .frame { grid-template-columns: 1fr; }
     nav { position: static; height: auto; flex-direction: row; overflow-x: auto; }
@@ -289,6 +338,8 @@ export const PAGE = String.raw`<!doctype html>
     <div class="brand">gms<span>.</span><small>sweep control</small></div>
     <a href="#overview" class="on" data-tab="overview">Overview</a>
     <a href="#control" data-tab="control">Control</a>
+    <a href="#cities" data-tab="cities">Cities</a>
+    <a href="#categories" data-tab="categories">Services</a>
     <a href="#sweep" data-tab="sweep">Sweep</a>
     <a href="#leads" data-tab="leads">Leads</a>
     <a href="#issues" data-tab="issues">Issues</a>
@@ -318,6 +369,48 @@ export const PAGE = String.raw`<!doctype html>
       <div class="label" style="margin:30px 0 11px">Activity</div>
       <div class="runbar" id="runbar"></div>
       <pre class="console" id="log">No task has run yet.</pre>
+    </section>
+
+    <section id="cities">
+      <h2>Cities</h2>
+      <div class="sub" id="cities-sub"></div>
+      <div class="tools">
+        <input type="search" id="cities-q" placeholder="Search city, state or zip…">
+        <span class="spacer"></span>
+        <button class="go ghost" id="cities-save" title="Write these lists to the project's seeds/ folder">Save to seeds/</button>
+        <button class="go" id="cities-add">Add city</button>
+      </div>
+      <div class="tools" id="cities-chips"></div>
+      <div id="cities-form"></div>
+      <div class="note" id="cities-note"></div>
+      <div class="wrap"><table>
+        <thead><tr>
+          <th>City</th><th>State</th><th>Zip</th><th>Searches</th><th>Leads</th>
+          <th>Last search</th><th>Status</th><th></th>
+        </tr></thead>
+        <tbody id="cities-body"></tbody>
+      </table></div>
+    </section>
+
+    <section id="categories">
+      <h2>Services</h2>
+      <div class="sub" id="categories-sub"></div>
+      <div class="tools">
+        <input type="search" id="categories-q" placeholder="Search services…">
+        <span class="spacer"></span>
+        <button class="go ghost" id="categories-save" title="Write these lists to the project's seeds/ folder">Save to seeds/</button>
+        <button class="go" id="categories-add">Add service</button>
+      </div>
+      <div class="tools" id="categories-chips"></div>
+      <div id="categories-form"></div>
+      <div class="note" id="categories-note"></div>
+      <div class="wrap"><table>
+        <thead><tr>
+          <th>Service</th><th>Weight</th><th>Searches</th><th>Leads</th>
+          <th>Last search</th><th>Status</th><th></th>
+        </tr></thead>
+        <tbody id="categories-body"></tbody>
+      </table></div>
     </section>
 
     <section id="sweep">
@@ -417,6 +510,7 @@ function show(tab) {
   $$('section').forEach((s) => s.classList.toggle('on', s.id === tab));
   $$('nav a').forEach((a) => a.classList.toggle('on', a.dataset.tab === tab));
   if (tab === 'control') loadControl();
+  if (tab === 'cities' || tab === 'categories') loadSeeds(tab);
   if (tab === 'sweep') loadPlate();
   if (tab === 'leads') loadLeads();
   if (tab === 'issues') loadIssues();
@@ -440,6 +534,7 @@ async function loadOverview() {
     { k: 'Done', v: num(done), of: num(o.jobsTotal), tone: 'ok' },
     { k: 'Running', v: num(o.jobs.leased), tone: o.jobs.leased ? 'hi' : '' },
     { k: 'Queued', v: num(o.jobs.pending) },
+    ...(o.jobs.paused ? [{ k: 'Paused', v: num(o.jobs.paused) }] : []),
     { k: 'Failed', v: num(o.jobs.failed), tone: o.jobs.failed ? 'bad' : '' },
     { k: 'Per hour', v: num(o.throughputPerHour) },
     { k: 'Remaining', v: duration(o.etaMs) },
@@ -484,8 +579,8 @@ let ctlOverview = null;
 let uploaded = { cities: null, categories: null };
 
 async function loadControl() {
-  const [t, o] = await Promise.all([get('/api/tasks'), get('/api/overview')]);
-  ctlState = t; ctlOverview = o;
+  const [t, o, q] = await Promise.all([get('/api/tasks'), get('/api/overview'), get('/api/queue')]);
+  ctlState = t; ctlOverview = o; queue = q;
 
   $('#ctl-sub').textContent = t.enabled
     ? 'Run everything from here. Each step unlocks when the one before it is done.'
@@ -499,20 +594,24 @@ async function loadControl() {
 
   const steps = [
     {
-      n: 1, title: 'Import your cities and services',
-      why: 'A spreadsheet with one sheet of cities and one of services. Leading zeros on zips are repaired automatically.',
+      n: 1, title: 'Your cities and services',
+      why: 'They ship with the project in the seeds/ folder and load on the first gms db migrate. Add, edit or pause them on the Cities and Services pages.',
       satisfied: hasSeeds,
       status: hasSeeds ? o.seeds.cities + ' cities · ' + o.seeds.categories + ' services' : null,
       body:
+        '<div class="opts"><a class="go ghost" href="#cities">Manage cities</a>' +
+        '<a class="go ghost" href="#categories">Manage services</a></div>' +
+        '<details' + (hasSeeds ? '' : ' open') + '><summary>Import from a spreadsheet instead</summary>' +
         '<div class="opts">' +
-        '<label>Cities</label><input type="file" id="up-cities" accept=".xlsx,.csv">' +
-        '<input type="text" id="sheet-cities" placeholder="Sheet name" style="width:120px">' +
-        '<button class="go ghost" id="do-cities">Import cities</button>' +
+        '<label class="chip">' + (workbook ? 'Change file' : 'Choose file') +
+        '<input type="file" id="up-book" accept=".xlsx,.csv" hidden></label>' +
+        (workbook ? '<span>' + esc(workbook.name) + '</span>' : '<span class="muted">an .xlsx workbook or a .csv</span>') +
         '</div><div class="opts">' +
-        '<label>Services</label><input type="file" id="up-cats" accept=".xlsx,.csv">' +
-        '<input type="text" id="sheet-cats" placeholder="Sheet name" style="width:120px">' +
-        '<button class="go ghost" id="do-cats">Import services</button>' +
-        '</div>',
+        '<label>Cities sheet</label>' + sheetPicker('sheet-cities', /cit/i) +
+        '<button class="go ghost" id="do-cities"' + (workbook ? '' : ' disabled') + '>Import cities</button>' +
+        '<label>Services sheet</label>' + sheetPicker('sheet-cats', /serv|categ/i) +
+        '<button class="go ghost" id="do-cats"' + (workbook ? '' : ' disabled') + '>Import services</button>' +
+        '</div><p style="margin-top:9px">Rows are matched by zip and service name, so importing again updates them in place. Nothing is deleted and paused rows stay paused.</p></details>',
     },
     {
       n: 2, title: 'Create the job list',
@@ -527,7 +626,30 @@ async function loadControl() {
         '</div>',
     },
     {
-      n: 3, title: 'Collect businesses from Google Maps',
+      n: 3, title: 'Choose where to search first',
+      why: 'Spreading gives every state a search before any state gets its next one, rotating cities and services, so leads from everywhere arrive early. Changes apply from the next search a worker picks up; a running scrape does not need restarting.',
+      blocked: !hasJobs, satisfied: hasJobs,
+      status: hasJobs ? planText(q.plan) : null,
+      body:
+        '<div class="opts">' +
+        '<label>Order</label><select id="q-order">' +
+        '<option value="spread"' + (q.plan.order === 'spread' ? ' selected' : '') + '>Spread across states</option>' +
+        '<option value="by-state"' + (q.plan.order === 'by-state' ? ' selected' : '') + '>One state at a time</option></select>' +
+        '<label>Chosen states</label><select id="q-scope">' +
+        '<option value="first"' + (q.plan.only ? '' : ' selected') + '>Search these first</option>' +
+        '<option value="only"' + (q.plan.only ? ' selected' : '') + '>Search only these</option></select>' +
+        '<button class="go ghost" id="q-clear">Clear states</button>' +
+        '<button class="go" id="do-queue">Apply</button>' +
+        '</div><div class="opts states" id="q-states">' + stateChips() + '</div>' +
+        '<p style="margin-top:9px">Click states to choose them, then Apply. The number under each is the searches left there. ' +
+        'Searching only some states parks the rest as on hold; a city you paused yourself stays paused either way.</p>' +
+        '<div class="label" style="margin-top:15px">Next up</div>' +
+        '<ol class="next">' + (q.next.length
+          ? q.next.map((j) => '<li>' + esc(j.category) + ' <span class="muted">in</span> ' + esc(j.city + ', ' + j.stateCode) + '</li>').join('')
+          : '<li class="muted">nothing queued</li>') + '</ol>',
+    },
+    {
+      n: 4, title: 'Collect businesses from Google Maps',
       why: 'Works through the queue. Safe to stop and restart — it picks up exactly where it left off.',
       blocked: !hasJobs, satisfied: hasBusinesses,
       status: hasBusinesses ? num(o.businesses) + ' businesses' : null,
@@ -540,7 +662,7 @@ async function loadControl() {
         '</div>',
     },
     {
-      n: 4, title: 'Find email addresses',
+      n: 5, title: 'Find email addresses',
       why: 'Crawls each business website. Government and education addresses are excluded.',
       blocked: !hasDomains, satisfied: o.emails.usable > 0,
       status: o.emails.usable > 0 ? num(o.emails.usable) + ' addresses' : null,
@@ -552,7 +674,7 @@ async function loadControl() {
         '</div>',
     },
     {
-      n: 5, title: 'Export your leads',
+      n: 6, title: 'Export your leads',
       why: 'Writes a CSV of everything new since the last export.',
       blocked: !hasBusinesses, satisfied: false,
       body:
@@ -566,7 +688,7 @@ async function loadControl() {
         '</div>',
     },
     {
-      n: 6, title: 'Share with your team',
+      n: 7, title: 'Share with your team',
       why: 'Sends new leads to a Google Sheet anyone can open. Run it again any time — it only sends what is new.',
       blocked: !hasBusinesses, satisfied: false,
       body:
@@ -581,6 +703,13 @@ async function loadControl() {
     },
   ];
 
+  // Re-rendering happens whenever a task finishes; keep what was typed.
+  const kept = {};
+  $$('#steps input, #steps select').forEach((el) => {
+    if (el.id && el.type !== 'file') kept[el.id] = el.type === 'checkbox' ? el.checked : el.value;
+  });
+  const openDetails = $('#steps details')?.open;
+
   $('#steps').innerHTML = steps.map((s) =>
     '<div class="step ' + (s.blocked ? 'blocked' : s.satisfied ? 'satisfied' : 'ready') + '">' +
     '<div class="idx">' + s.n + '</div>' +
@@ -589,8 +718,44 @@ async function loadControl() {
     '<div class="label">' + (s.status ? esc(s.status) : s.blocked ? 'waiting' : '') + '</div></div>',
   ).join('');
 
+  for (const [id, value] of Object.entries(kept)) {
+    const el = document.getElementById(id);
+    if (!el || (el.tagName === 'SELECT' && ![...el.options].some((o) => o.value === value))) continue;
+    if (el.type === 'checkbox') el.checked = value; else el.value = value;
+  }
+  if (openDetails !== undefined && $('#steps details')) $('#steps details').open = openDetails;
+
   if (t.enabled) wireControls();
   renderRun();
+}
+
+// ── Queue order ────────────────────────────────────────────────────────
+let queue = { plan: { order: 'spread', states: [], only: false }, states: [], next: [] };
+/** States toggled but not yet applied. null means "whatever the plan says". */
+let queueDraft = null;
+
+function planText(p) {
+  const order = p.order === 'spread' ? 'spread' : 'one state at a time';
+  if (!p.states.length) return order + ' · all states';
+  const list = p.states.length > 4 ? p.states.length + ' states' : p.states.join(', ');
+  return order + ' · ' + (p.only ? 'only ' + list : list + ' first');
+}
+
+function stateChips() {
+  const chosen = new Set(queueDraft ?? queue.plan.states);
+  return queue.states.map((st) =>
+    '<button class="chip st" data-state="' + esc(st.code) + '" aria-pressed="' + chosen.has(st.code) + '" title="' +
+    esc(st.name + ': ' + num(st.done) + ' searches done, ' + num(st.remaining) + ' to go') + '">' +
+    esc(st.code) + '<small>' + (st.remaining ? num(st.remaining) : 'done') + '</small></button>').join('');
+}
+
+/** A sheet chooser for the uploaded workbook, preselecting the likely sheet. */
+function sheetPicker(id, likely) {
+  if (!workbook) return '<select id="' + id + '" disabled><option>choose a file first</option></select>';
+  if (!workbook.sheets) return '<select id="' + id + '" disabled><option value="">CSV: whole file</option></select>';
+  const pick = workbook.sheets.find((n) => likely.test(n));
+  return '<select id="' + id + '">' + workbook.sheets.map((n) =>
+    '<option' + (n === pick ? ' selected' : '') + '>' + esc(n) + '</option>').join('') + '</select>';
 }
 
 function renderRun() {
@@ -651,27 +816,56 @@ async function startTask(command, options) {
   loadControl();
 }
 
-async function upload(inputId, kind) {
-  const file = $(inputId).files[0];
-  if (!file) { alert('Choose a file first.'); return null; }
+/** The workbook uploaded for step 1, kept across re-renders. */
+let workbook = null;
+
+async function uploadWorkbook(file) {
   const r = await fetch('/api/upload?name=' + encodeURIComponent(file.name), {
     method: 'POST', body: file,
   }).then((x) => x.json());
-  if (r.error) { alert(r.error); return null; }
-  uploaded[kind] = r.file;
-  return r.file;
+  if (r.error) { alert(r.error); return; }
+  let sheets = null;
+  if (!/\.csv$/i.test(file.name)) {
+    const listed = await get('/api/sheets?file=' + encodeURIComponent(r.file));
+    if (listed.error) { alert(listed.error); return; }
+    sheets = listed.sheets;
+  }
+  workbook = { file: r.file, name: file.name, sheets };
+  loadControl();
 }
 
 function wireControls() {
   const on = (id, fn) => { const el = $(id); if (el) el.addEventListener('click', fn); };
 
-  on('#do-cities', async () => {
-    const file = await upload('#up-cities', 'cities');
-    if (file) startTask('import-cities', { file, sheet: $('#sheet-cities').value });
+  const book = $('#up-book');
+  if (book) book.addEventListener('change', () => { if (book.files[0]) uploadWorkbook(book.files[0]); });
+  on('#do-cities', () => workbook && startTask('import-cities', {
+    file: workbook.file, sheet: workbook.sheets ? $('#sheet-cities').value : '' }));
+  on('#do-cats', () => workbook && startTask('import-categories', {
+    file: workbook.file, sheet: workbook.sheets ? $('#sheet-cats').value : '' }));
+  const chips = $('#q-states');
+  if (chips) chips.addEventListener('click', (e) => {
+    const chip = e.target.closest('[data-state]');
+    if (!chip) return;
+    const chosen = new Set(queueDraft ?? queue.plan.states);
+    if (chosen.has(chip.dataset.state)) chosen.delete(chip.dataset.state); else chosen.add(chip.dataset.state);
+    queueDraft = [...chosen].sort();
+    chip.setAttribute('aria-pressed', String(chosen.has(chip.dataset.state)));
   });
-  on('#do-cats', async () => {
-    const file = await upload('#up-cats', 'categories');
-    if (file) startTask('import-categories', { file, sheet: $('#sheet-cats').value });
+  on('#q-clear', () => {
+    queueDraft = [];
+    $$('#q-states [data-state]').forEach((c) => c.setAttribute('aria-pressed', 'false'));
+  });
+  on('#do-queue', async () => {
+    const res = await fetch('/api/queue', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ order: $('#q-order').value, states: queueDraft ?? queue.plan.states,
+        only: $('#q-scope').value === 'only' }),
+    });
+    const r = await res.json();
+    if (!res.ok) { alert(r.error); return; }
+    queueDraft = null;
+    loadControl();
   });
   on('#do-plan', () => startTask('plan', {
     cities: $('#p-cities').value, categories: $('#p-cats').value }));
@@ -704,6 +898,233 @@ setInterval(async () => {
   if (wasRunning && !t.running) { loadControl(); loadOverview(); }
 }, 1500);
 
+// ── Cities and services ───────────────────────────────────────────────
+// One table per list, with each row's share of searches finished. Pausing is
+// the way to drop something that has already produced leads: the server
+// refuses to delete those, and says so.
+const SEEDS = {
+  cities: {
+    kind: 'city', noun: 'city', plural: 'cities',
+    label: (c) => c.city + ', ' + c.state_code,
+    match: (c) => [c.city, c.state, c.state_code, c.zip, c.county].join(' ').toLowerCase(),
+    cells: (c) =>
+      '<td class="nm">' + esc(c.city) + '</td>' +
+      '<td>' + esc(c.state_code) + '</td>' +
+      '<td class="muted">' + esc(c.zip) + '</td>',
+    fields: [
+      { k: 'city', label: 'City', ph: 'Atlanta', w: 170 },
+      { k: 'stateCode', label: 'State', ph: 'GA', w: 60 },
+      { k: 'zip', label: 'Zip', ph: '30303', w: 90 },
+      { k: 'coordinates', label: 'Coordinates', ph: '33.7533, -84.3899', w: 190 },
+      { k: 'county', label: 'County', ph: 'optional', w: 140 },
+      { k: 'population', label: 'Population', ph: 'optional', w: 110 },
+    ],
+    values: (c) => ({
+      city: c.city, stateCode: c.state_code, zip: c.zip, coordinates: c.lat + ', ' + c.lng,
+      county: c.county || '', population: c.population ?? '',
+    }),
+    hint: 'Coordinates: in Google Maps, right-click the city centre and click the numbers at the top to copy them.',
+  },
+  categories: {
+    kind: 'category', noun: 'service', plural: 'services',
+    label: (c) => c.name,
+    match: (c) => [c.name, c.aliases || ''].join(' ').toLowerCase(),
+    cells: (c) =>
+      '<td class="nm">' + esc(c.name) + '</td>' +
+      '<td class="muted">' + esc(c.weight) + '</td>',
+    fields: [
+      { k: 'name', label: 'Service', ph: 'Plumber', w: 260 },
+      { k: 'weight', label: 'Weight', ph: '1', w: 70 },
+      { k: 'aliases', label: 'Also search for', ph: 'optional, separated by |', w: 260 },
+    ],
+    values: (c) => ({
+      name: c.name, weight: c.weight,
+      aliases: c.aliases ? JSON.parse(c.aliases).join(' | ') : '',
+    }),
+    hint: 'Weight orders the queue: a higher weight is searched sooner. Changing it re-orders searches not yet run.',
+  },
+};
+
+const FILTERS = [
+  ['all', 'All'], ['active', 'Active'], ['complete', 'Complete'],
+  ['in progress', 'In progress'], ['queued', 'Not started'], ['needs retry', 'Needs retry'],
+  ['on hold', 'On hold'], ['paused', 'Paused'],
+];
+let canWrite = false;
+const seedState = {
+  cities: { rows: [], filter: 'all', editing: null },
+  categories: { rows: [], filter: 'all', editing: null },
+};
+
+function ago(t) {
+  if (!t) return '—';
+  const m = (Date.now() - t) / 60000;
+  if (m < 1) return 'just now';
+  if (m < 60) return Math.round(m) + 'm ago';
+  if (m < 2880) return Math.round(m / 60) + 'h ago';
+  return Math.round(m / 1440) + 'd ago';
+}
+
+function inFilter(row, filter) {
+  if (filter === 'all') return true;
+  if (filter === 'active') return row.seed.active === 1;
+  if (filter === 'queued') return row.progress === 'queued' || row.progress === 'not planned';
+  if (filter === 'in progress') return row.progress === 'in progress' || row.progress === 'running';
+  return row.progress === filter;
+}
+
+async function loadSeeds(which) {
+  seedState[which].rows = await get('/api/seeds?kind=' + which);
+  renderSeeds(which);
+}
+
+function renderSeeds(which) {
+  const spec = SEEDS[which], state = seedState[which], rows = state.rows;
+  const q = $('#' + which + '-q').value.trim().toLowerCase();
+
+  const active = rows.filter((r) => r.seed.active === 1).length;
+  const complete = rows.filter((r) => r.progress === 'complete').length;
+  $('#' + which + '-sub').textContent =
+    rows.length + ' ' + spec.plural + ' · ' + active + ' active · ' + complete + ' complete' +
+    (canWrite ? '' : ' · read-only, restart with --control to edit');
+
+  $('#' + which + '-chips').innerHTML = FILTERS.map(([key, label]) => {
+    const n = rows.filter((r) => inFilter(r, key)).length;
+    return '<button class="chip" data-filter="' + key + '" aria-pressed="' + (state.filter === key) + '">' +
+      esc(label) + ' ' + n + '</button>';
+  }).join('');
+
+  $('#' + which + '-add').hidden = !canWrite;
+  $('#' + which + '-save').hidden = !canWrite;
+
+  const shown = rows.filter((r) => inFilter(r, state.filter) && (!q || spec.match(r.seed).includes(q)));
+  const span = which === 'cities' ? 8 : 7;
+  $('#' + which + '-body').innerHTML = shown.length ? shown.map((r) => {
+    const j = r.jobs, finished = j.done + j.skipped;
+    const share = j.total ? finished / j.total : 0;
+    const off = r.seed.active !== 1;
+    return '<tr data-id="' + r.seed.id + '"' + (off ? ' class="off"' : '') + '>' + spec.cells(r.seed) +
+      '<td>' + (j.total
+        ? '<span class="meter' + (share === 1 ? ' full' : '') + '"><i style="width:' + (share * 100).toFixed(1) + '%"></i></span>' +
+          num(finished) + '<span class="muted"> / ' + num(j.total) + '</span>' +
+          (j.failed ? ' <span class="tag needs-retry">' + j.failed + ' failed</span>' : '')
+        : '<span class="muted">none planned</span>') + '</td>' +
+      '<td>' + (r.leads ? num(r.leads) : '<span class="muted">0</span>') + '</td>' +
+      '<td class="muted">' + ago(j.lastFinishedAt) + '</td>' +
+      '<td><span class="tag ' + r.progress.replace(/ /g, '-') + '">' + esc(r.progress) + '</span></td>' +
+      '<td class="acts">' + (canWrite
+        ? '<button class="act" data-act="edit">Edit</button>' +
+          '<button class="act" data-act="' + (off ? 'resume' : 'pause') + '">' + (off ? 'Resume' : 'Pause') + '</button>' +
+          '<button class="act danger" data-act="delete">Delete</button>'
+        : '') + '</td></tr>';
+  }).join('') : '<tr><td colspan="' + span + '" class="empty">' +
+    (rows.length ? 'Nothing matches.' : 'No ' + spec.plural + ' yet. Run gms seeds load, or add one.') + '</td></tr>';
+
+  renderEditor(which);
+}
+
+function renderEditor(which) {
+  const spec = SEEDS[which], state = seedState[which], box = $('#' + which + '-form');
+  if (state.editing === null) { box.innerHTML = ''; return; }
+  const row = state.editing === 'new' ? null : state.rows.find((r) => r.seed.id === state.editing);
+  const values = row ? spec.values(row.seed) : {};
+  box.innerHTML = '<div class="editor"><div class="opts">' +
+    spec.fields.map((f) => '<label><span>' + esc(f.label) + '</span>' +
+      '<input type="text" data-field="' + f.k + '" placeholder="' + esc(f.ph) + '" style="width:' + f.w + 'px" value="' +
+      esc(values[f.k] ?? '') + '"></label>').join('') +
+    '<button class="go" data-act="submit">' + (row ? 'Save' : 'Add ' + spec.noun) + '</button>' +
+    '<button class="go ghost" data-act="cancel">Cancel</button>' +
+    '</div><div class="p">' + esc(spec.hint) +
+    (row ? ' Saving updates the searches not yet run; finished ones keep what they searched.' : '') + '</div></div>';
+  box.querySelector('input').focus();
+}
+
+function seedNote(which, tone, text) {
+  const note = $('#' + which + '-note');
+  note.className = 'note ' + tone;
+  note.textContent = text;
+}
+
+async function seedEdit(which, op, id, values) {
+  const spec = SEEDS[which];
+  const res = await fetch('/api/seeds', {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ kind: spec.kind, op, id, values }),
+  });
+  const r = await res.json();
+  if (!res.ok) {
+    seedNote(which, 'bad', r.error + (r.hint ? ' ' + r.hint : ''));
+    return false;
+  }
+  const n = (k, word) => (r[k] ? ' ' + num(r[k]) + ' ' + word + '.' : '');
+  seedNote(which, 'ok',
+    op === 'add' ? 'Added.' + (r.jobsCreated ? n('jobsCreated', 'searches queued') : ' Its searches are created with the next "Create jobs".')
+    : op === 'update' ? 'Saved.' + n('jobsUpdated', 'queued searches updated')
+    : op === 'pause' ? 'Paused. Nothing more is searched for it.' + n('jobsChanged', 'queued searches parked')
+    : op === 'resume' ? 'Resumed.' + n('jobsChanged', 'searches back in the queue') + n('jobsCreated', 'new searches queued')
+    : 'Deleted.' + n('jobsRemoved', 'planned searches removed'));
+  return true;
+}
+
+['cities', 'categories'].forEach((which) => {
+  const spec = SEEDS[which], state = seedState[which];
+
+  $('#' + which + '-q').addEventListener('input', () => renderSeeds(which));
+  $('#' + which + '-chips').addEventListener('click', (e) => {
+    const chip = e.target.closest('[data-filter]');
+    if (!chip) return;
+    state.filter = chip.dataset.filter;
+    renderSeeds(which);
+  });
+  $('#' + which + '-add').addEventListener('click', () => {
+    state.editing = 'new'; seedNote(which, '', ''); renderEditor(which);
+  });
+  $('#' + which + '-save').addEventListener('click', async () => {
+    const res = await fetch('/api/seeds/save', { method: 'POST' });
+    const r = await res.json();
+    seedNote(which, res.ok ? 'ok' : 'bad', res.ok
+      ? 'Wrote ' + r.cities + ' cities and ' + r.categories + ' services to ' + r.dir +
+        '. Commit that folder so a fresh install, such as the VPS, starts from these lists.'
+      : r.error);
+  });
+
+  $('#' + which + '-form').addEventListener('click', async (e) => {
+    const act = e.target.closest('[data-act]')?.dataset.act;
+    if (act === 'cancel') { state.editing = null; renderEditor(which); return; }
+    if (act !== 'submit') return;
+    const values = {};
+    $$('#' + which + '-form [data-field]').forEach((el) => { values[el.dataset.field] = el.value; });
+    const isNew = state.editing === 'new';
+    if (await seedEdit(which, isNew ? 'add' : 'update', isNew ? undefined : state.editing, values)) {
+      state.editing = null;
+      loadSeeds(which);
+    }
+  });
+  $('#' + which + '-form').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') $('#' + which + '-form [data-act="submit"]').click();
+    if (e.key === 'Escape') $('#' + which + '-form [data-act="cancel"]').click();
+  });
+
+  $('#' + which + '-body').addEventListener('click', async (e) => {
+    const act = e.target.closest('[data-act]')?.dataset.act;
+    const tr = e.target.closest('tr[data-id]');
+    if (!act || !tr) return;
+    const id = Number(tr.dataset.id);
+    const row = state.rows.find((r) => r.seed.id === id);
+    if (act === 'edit') { state.editing = id; seedNote(which, '', ''); renderEditor(which); return; }
+    // The server refuses these too; saying so up front saves a pointless confirm.
+    if (act === 'delete' && row.leads > 0) {
+      seedNote(which, 'bad', spec.label(row.seed) + ' has already produced ' + num(row.leads) +
+        ' leads, so it cannot be deleted. Pause it instead: nothing more is searched for this ' +
+        spec.noun + ', and its leads keep their origin.');
+      return;
+    }
+    if (act === 'delete' && !confirm('Delete ' + spec.label(row.seed) + '?' +
+      (row.jobs.total ? ' Its ' + row.jobs.total + ' planned searches are removed too.' : ''))) return;
+    if (await seedEdit(which, act, id)) loadSeeds(which);
+  });
+});
+
 // ── Sweep plate ────────────────────────────────────────────────────────
 let plateBy = 'city';
 $$('[data-by]').forEach((b) => b.addEventListener('click', () => {
@@ -720,17 +1141,18 @@ async function loadPlate() {
   }
   $('#plate').innerHTML = groups.map((g) => {
     const share = g.total ? (g.done + g.skipped) / g.total : 0;
-    const complete = g.pending + g.leased + g.failed === 0;
+    const complete = g.pending + g.leased + g.failed + g.paused === 0;
     const title = g.label + (g.sublabel ? ', ' + g.sublabel : '') +
       ' — ' + g.done + '/' + g.total + ' done' +
       (g.failed ? ', ' + g.failed + ' failed' : '') +
-      (g.leased ? ', ' + g.leased + ' running' : '');
+      (g.leased ? ', ' + g.leased + ' running' : '') +
+      (g.paused ? ', ' + g.paused + ' paused' : '');
     return '<div class="tile' + (complete ? ' done' : '') + (g.failed ? ' fail' : '') +
       '" title="' + esc(title) + '">' +
       '<i style="height:' + (share * 100).toFixed(1) + '%"></i>' +
       '<b>' + esc(g.sublabel || g.label.slice(0, 4)) + '</b></div>';
   }).join('');
-  const complete = groups.filter((g) => g.pending + g.leased + g.failed === 0).length;
+  const complete = groups.filter((g) => g.pending + g.leased + g.failed + g.paused === 0).length;
   $('#plate-count').textContent = complete + ' of ' + groups.length + ' complete';
 }
 
@@ -820,11 +1242,11 @@ $('#retry').addEventListener('click', async () => {
 /** Disable the retry button when this dashboard cannot write. */
 async function syncRetryButton() {
   const t = await get('/api/tasks').catch(() => ({ enabled: false }));
+  canWrite = t.enabled;
   const button = $('#retry');
   button.disabled = !t.enabled;
   button.title = t.enabled ? '' : 'Read-only. Restart with --control to retry from this page.';
 }
-syncRetryButton();
 
 // ── Settings ───────────────────────────────────────────────────────────
 async function loadConfig() {
@@ -888,7 +1310,9 @@ const routeFromHash = () => {
   show(document.getElementById(tab) ? tab : 'overview');
 };
 window.addEventListener('hashchange', routeFromHash);
-routeFromHash();
+// Route only once we know whether this dashboard can write, so the Cities and
+// Services pages render their edit buttons on the first paint.
+syncRetryButton().finally(routeFromHash);
 </script>
 </body>
 </html>`;

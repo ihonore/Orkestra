@@ -1,0 +1,186 @@
+Zip,City,State,State Code,County,County Code,Latitude,Longitude,Population,Active
+99501,Anchorage,Alaska,AK,Anchorage,02020,61.22035,-149.85702,,yes
+35203,Birmingham,Alabama,AL,Jefferson,01073,33.51867,-86.80971,,yes
+35801,Huntsville,Alabama,AL,Madison,01089,34.72466,-86.56227,,yes
+36602,Mobile,Alabama,AL,Mobile,01097,30.69355,-88.04555,,yes
+36104,Montgomery,Alabama,AL,Montgomery,01101,32.39967,-86.32494,,yes
+35401,Tuscaloosa,Alabama,AL,Tuscaloosa,01125,33.16878,-87.61357,,yes
+72701,Fayetteville,Arkansas,AR,Washington,05143,35.98468,-94.08076,,yes
+72201,Little Rock,Arkansas,AR,Pulaski,05119,34.74728,-92.27985,,yes
+85003,Phoenix,Arizona,AZ,Maricopa,04013,33.45076,-112.07836,,yes
+85701,Tucson,Arizona,AZ,Pima,04019,32.2169,-110.97095,,yes
+92801,Anaheim,California,CA,Orange,06059,33.84444,-117.95222,,yes
+93301,Bakersfield,California,CA,Kern,06029,35.38451,-119.02082,,yes
+90802,Long Beach,California,CA,Los Angeles,06037,33.75021,-118.2114,,yes
+90001,Los Angeles,California,CA,Los Angeles,06037,33.97398,-118.24955,,yes
+94601,Oakland,California,CA,Alameda,06001,37.7767,-122.2184,,yes
+92101,San Diego,California,CA,San Diego,06073,32.72396,-117.17072,,yes
+95110,San Jose,California,CA,Santa Clara,06085,37.34662,-121.90993,,yes
+93101,Santa Barbara,California,CA,Santa Barbara,06083,34.41898,-119.70923,,yes
+95401,Santa Rosa,California,CA,Sonoma,06097,38.44898,-122.79221,,yes
+95202,Stockton,California,CA,San Joaquin,06077,37.95945,-121.28754,,yes
+93001,Ventura,California,CA,Ventura,06111,34.19219,-119.50794,,yes
+80010,Aurora,Colorado,CO,Arapahoe,08005,39.73868,-104.86256,,yes
+80301,Boulder,Colorado,CO,Boulder,08013,40.04859,-105.20013,,yes
+80902,Colorado Springs,Colorado,CO,El Paso,08041,38.68317,-104.80786,,yes
+80202,Denver,Colorado,CO,Denver,08031,39.75193,-104.99776,,yes
+80521,Fort Collins,Colorado,CO,Larimer,08069,40.59325,-105.12777,,yes
+06510,New Haven,Connecticut,CT,New Haven,09009,41.30648,-72.92601,,yes
+20001,Washington,District of Columbia,DC,District of Columbia,11001,38.91085,-77.0179,,yes
+19801,Wilmington,Delaware,DE,New Castle,10003,39.7286,-75.54354,,yes
+33755,Clearwater,Florida,FL,Pinellas,12103,27.97958,-82.77983,,yes
+32114,Daytona Beach,Florida,FL,Volusia,12127,29.19393,-81.05145,,yes
+32541,Destin,Florida,FL,Okaloosa,12091,30.39699,-86.47062,,yes
+33901,Fort Myers,Florida,FL,Lee,12071,26.62116,-81.87865,,yes
+32601,Gainesville,Florida,FL,Alachua,12001,29.64888,-82.32498,,yes
+32202,Jacksonville,Florida,FL,Duval,12031,30.32503,-81.64802,,yes
+33040,Key West,Florida,FL,Monroe,12087,24.58547,-81.75451,,yes
+33801,Lakeland,Florida,FL,Polk,12105,28.04082,-81.89624,,yes
+32901,Melbourne,Florida,FL,Brevard,12009,28.07903,-80.62322,,yes
+33101,Miami,Florida,FL,Miami-Dade,12086,25.7793,-80.19874,,yes
+34101,Naples,Florida,FL,Collier,12021,26.04632,-81.76799,,yes
+34470,Ocala,Florida,FL,Marion,12083,29.19891,-82.08742,,yes
+32137,Palm Coast,Florida,FL,Flagler,12035,29.57972,-81.22272,,yes
+32401,Panama City,Florida,FL,Bay,12005,30.15978,-85.6608,,yes
+32501,Pensacola,Florida,FL,Escambia,12033,30.4284,-87.22238,,yes
+34952,Port Saint Lucie,Florida,FL,St. Lucie,12111,27.29562,-80.29887,,yes
+32301,Tallahassee,Florida,FL,Leon,12073,30.42563,-84.25823,,yes
+34285,Venice,Florida,FL,Sarasota,12115,27.09153,-82.43399,,yes
+33401,West Palm Beach,Florida,FL,Palm Beach,12099,26.71645,-80.06779,,yes
+30601,Athens,Georgia,GA,Clarke,13059,34.00087,-83.34851,,yes
+30303,Atlanta,Georgia,GA,Fulton,13121,33.75332,-84.38986,,yes
+30901,Augusta,Georgia,GA,Richmond,13245,33.43649,-81.95697,,yes
+31901,Columbus,Georgia,GA,Muscogee,13215,32.46488,-84.97987,,yes
+31201,Macon,Georgia,GA,Bibb,13021,32.80946,-83.61684,,yes
+31401,Savannah,Georgia,GA,Chatham,13051,32.07468,-81.08892,,yes
+52401,Cedar Rapids,Iowa,IA,Linn,19113,41.97541,-91.65848,,yes
+52801,Davenport,Iowa,IA,Scott,19163,41.52076,-90.57451,,yes
+50309,Des Moines,Iowa,IA,Polk,19153,41.58487,-93.62063,,yes
+83702,Boise,Idaho,ID,Ada,16001,43.67575,-116.16934,,yes
+60601,Chicago,Illinois,IL,Cook,17031,41.88526,-87.62194,,yes
+61602,Peoria,Illinois,IL,Peoria,17143,40.67491,-89.60738,,yes
+62701,Springfield,Illinois,IL,Sangamon,17167,39.80082,-89.64884,,yes
+47708,Evansville,Indiana,IN,Vanderburgh,18163,37.97445,-87.57379,,yes
+46802,Fort Wayne,Indiana,IN,Allen,18003,41.06793,-85.16312,,yes
+46201,Indianapolis,Indiana,IN,Marion,18097,39.77421,-86.10917,,yes
+46601,South Bend,Indiana,IN,St. Joseph,18141,41.67007,-86.25319,,yes
+67202,Wichita,Kansas,KS,Sedgwick,20173,37.68676,-97.33527,,yes
+40502,Lexington,Kentucky,KY,Fayette,21067,38.01387,-84.48207,,yes
+40202,Louisville,Kentucky,KY,Jefferson,21111,38.25718,-85.7535,,yes
+70801,Baton Rouge,Louisiana,LA,East Baton Rouge,22033,30.44965,-91.18597,,yes
+70501,Lafayette,Louisiana,LA,Lafayette,22055,30.23973,-91.99045,,yes
+71101,Shreveport,Louisiana,LA,Caddo,22017,32.50609,-93.74683,,yes
+02108,Boston,Massachusetts,MA,Suffolk,25025,42.35767,-71.06505,,yes
+01103,Springfield,Massachusetts,MA,Hampden,25013,42.104,-72.5921,,yes
+21201,Baltimore,Maryland,MD,Baltimore,24510,39.29479,-76.6222,,yes
+48103,Ann Arbor,Michigan,MI,Washtenaw,26161,42.25991,-83.84325,,yes
+48120,Dearborn,Michigan,MI,Wayne,26163,42.30697,-83.17394,,yes
+48201,Detroit,Michigan,MI,Wayne,26163,42.34704,-83.06014,,yes
+48906,Lansing,Michigan,MI,Ingham,26065,42.78453,-84.58759,,yes
+55402,Minneapolis,Minnesota,MN,Hennepin,27053,44.97605,-93.2716,,yes
+65201,Columbia,Missouri,MO,Boone,29019,38.8982,-92.24359,,yes
+64101,Kansas City,Missouri,MO,Jackson,29095,39.10362,-94.6006,,yes
+65802,Springfield,Missouri,MO,Greene,29077,37.20909,-93.35405,,yes
+39501,Gulfport,Mississippi,MS,Harrison,28047,30.38317,-89.10346,,yes
+39401,Hattiesburg,Mississippi,MS,Forrest,28035,31.23265,-89.26717,,yes
+39201,Jackson,Mississippi,MS,Hinds,28049,32.28931,-90.18396,,yes
+38655,Oxford,Mississippi,MS,Lafayette,28071,34.33305,-89.47577,,yes
+39759,Starkville,Mississippi,MS,Oktibbeha,28105,33.43662,-88.82643,,yes
+59101,Billings,Montana,MT,Yellowstone,30111,45.61405,-108.38675,,yes
+59715,Bozeman,Montana,MT,Gallatin,30031,45.82857,-110.90996,,yes
+59801,Missoula,Montana,MT,Missoula,30063,46.85627,-114.01491,,yes
+28801,Asheville,North Carolina,NC,Buncombe,37021,35.59416,-82.55784,,yes
+28202,Charlotte,North Carolina,NC,Mecklenburg,37119,35.22778,-80.84458,,yes
+28301,Fayetteville,North Carolina,NC,Cumberland,37051,35.07431,-78.88358,,yes
+27401,Greensboro,North Carolina,NC,Guilford,37081,36.07011,-79.76582,,yes
+28601,Hickory,North Carolina,NC,Catawba,37035,35.77253,-81.32634,,yes
+27260,High Point,North Carolina,NC,Guilford,37081,35.95396,-79.98833,,yes
+27959,Nags Head,North Carolina,NC,Dare,37055,35.88591,-75.59657,,yes
+27601,Raleigh,North Carolina,NC,Wake,37183,35.77367,-78.63442,,yes
+28401,Wilmington,North Carolina,NC,New Hanover,37129,34.27257,-77.96332,,yes
+27101,Winston Salem,North Carolina,NC,Forsyth,37067,36.11173,-80.19857,,yes
+58102,Fargo,North Dakota,ND,Cass,38017,46.9209,-96.83183,,yes
+68502,Lincoln,Nebraska,NE,Lancaster,31109,40.78539,-96.69847,,yes
+68102,Omaha,Nebraska,NE,Douglas,31055,41.26204,-95.93306,,yes
+03101,Manchester,New Hampshire,NH,Hillsborough,33011,42.98892,-71.46588,,yes
+08401,Atlantic City,New Jersey,NJ,Atlantic,34001,39.37961,-74.45278,,yes
+08540,Princeton,New Jersey,NJ,Mercer,34021,40.3633,-74.65567,,yes
+89101,Las Vegas,Nevada,NV,Clark,32003,36.17251,-115.12228,,yes
+89501,Reno,Nevada,NV,Washoe,32031,39.52566,-119.81303,,yes
+12202,Albany,New York,NY,Albany,36001,42.63378,-73.76322,,yes
+10451,Bronx,New York,NY,Bronx,36005,40.82077,-73.92387,,yes
+11201,Brooklyn,New York,NY,Kings,36047,40.69463,-73.98972,,yes
+14201,Buffalo,New York,NY,Erie,36029,42.89667,-78.88697,,yes
+11101,Long Island City,New York,NY,Queens,36081,40.74671,-73.93893,,yes
+10001,New York,New York,NY,New York,36061,40.75065,-73.99718,,yes
+14604,Rochester,New York,NY,Monroe,36055,43.15678,-77.60479,,yes
+10301,Staten Island,New York,NY,Richmond,36085,40.62846,-74.0962,,yes
+13202,Syracuse,New York,NY,Onondaga,36067,43.04381,-76.15068,,yes
+44301,Akron,Ohio,OH,Summit,39153,41.04388,-81.52455,,yes
+44702,Canton,Ohio,OH,Stark,39151,40.79988,-81.37543,,yes
+45202,Cincinnati,Ohio,OH,Hamilton,39061,39.10893,-84.50253,,yes
+44101,Cleveland,Ohio,OH,Cuyahoga,39035,41.48928,-81.66732,,yes
+43201,Columbus,Ohio,OH,Franklin,39049,39.99131,-83.00039,,yes
+45402,Dayton,Ohio,OH,Montgomery,39113,39.75954,-84.21002,,yes
+43604,Toledo,Ohio,OH,Lucas,39095,41.65203,-83.53993,,yes
+73019,Norman,Oklahoma,OK,Cleveland,40027,35.20606,-97.44358,,yes
+73102,Oklahoma City,Oklahoma,OK,Oklahoma,40109,35.47077,-97.51894,,yes
+97330,Corvallis,Oregon,OR,Benton,41003,44.63646,-123.27657,,yes
+97401,Eugene,Oregon,OR,Lane,41039,44.06825,-123.08181,,yes
+97201,Portland,Oregon,OR,Multnomah,41051,45.50777,-122.68975,,yes
+97301,Salem,Oregon,OR,Marion,41047,44.94903,-123.00399,,yes
+18101,Allentown,Pennsylvania,PA,Lehigh,42077,40.6027,-75.46925,,yes
+17101,Harrisburg,Pennsylvania,PA,Dauphin,42043,40.25916,-76.88769,,yes
+19102,Philadelphia,Pennsylvania,PA,Philadelphia,42101,39.95287,-75.16549,,yes
+15201,Pittsburgh,Pennsylvania,PA,Allegheny,42003,40.47511,-79.95285,,yes
+00901,San Juan,Puerto Rico,PR,San Juan,72127,18.46532,-66.10485,,yes
+02903,Providence,Rhode Island,RI,Providence,44007,41.81805,-71.40901,,yes
+29401,Charleston,South Carolina,SC,Charleston,45019,32.77869,-79.93494,,yes
+29201,Columbia,South Carolina,SC,Richland,45079,33.98345,-81.02814,,yes
+29926,Hilton Head Island,South Carolina,SC,Beaufort,45013,32.22801,-80.75234,,yes
+29572,Myrtle Beach,South Carolina,SC,Horry,45051,33.76918,-78.78914,,yes
+57103,Sioux Falls,South Dakota,SD,Minnehaha,46099,43.54647,-96.68894,,yes
+37402,Chattanooga,Tennessee,TN,Hamilton,47065,35.04357,-85.3184,,yes
+37040,Clarksville,Tennessee,TN,Montgomery,47125,36.52333,-87.33336,,yes
+37601,Johnson City,Tennessee,TN,Washington,47179,36.33029,-82.32145,,yes
+37902,Knoxville,Tennessee,TN,Knox,47093,35.96378,-83.92022,,yes
+38103,Memphis,Tennessee,TN,Shelby,47157,35.15313,-90.05543,,yes
+37201,Nashville,Tennessee,TN,Davidson,47037,36.16618,-86.77756,,yes
+79601,Abilene,Texas,TX,Taylor,48441,32.57964,-99.66351,,yes
+79101,Amarillo,Texas,TX,Potter,48375,35.20599,-101.8395,,yes
+78701,Austin,Texas,TX,Travis,48453,30.27049,-97.74235,,yes
+77701,Beaumont,Texas,TX,Jefferson,48245,30.07314,-94.106,,yes
+78520,Brownsville,Texas,TX,Cameron,48061,25.96396,-97.5501,,yes
+77840,College Station,Texas,TX,Brazos,48041,30.60908,-96.32601,,yes
+78401,Corpus Christi,Texas,TX,Nueces,48355,27.79816,-97.40097,,yes
+75201,Dallas,Texas,TX,Dallas,48113,32.78773,-96.79936,,yes
+78539,Edinburg,Texas,TX,Hidalgo,48215,26.27915,-98.18321,,yes
+79901,El Paso,Texas,TX,El Paso,48141,31.76003,-106.4798,,yes
+76102,Fort Worth,Texas,TX,Tarrant,48439,32.75923,-97.32978,,yes
+77550,Galveston,Texas,TX,Galveston,48167,29.3098,-94.77746,,yes
+77002,Houston,Texas,TX,Harris,48201,29.75641,-95.3653,,yes
+78040,Laredo,Texas,TX,Webb,48479,27.51345,-99.50228,,yes
+79701,Midland,Texas,TX,Midland,48329,31.99237,-102.08147,,yes
+79761,Odessa,Texas,TX,Ector,48135,31.85574,-102.34958,,yes
+78201,San Antonio,Texas,TX,Bexar,48029,29.46879,-98.52828,,yes
+77478,Sugar Land,Texas,TX,Fort Bend,48157,29.61964,-95.607,,yes
+75701,Tyler,Texas,TX,Smith,48423,32.32331,-95.3009,,yes
+76701,Waco,Texas,TX,McLennan,48309,31.55202,-97.13858,,yes
+84401,Ogden,Utah,UT,Weber,49057,41.21865,-112.03814,,yes
+84601,Provo,Utah,UT,Utah,49049,40.22724,-111.69697,,yes
+24060,Blacksburg,Virginia,VA,Montgomery,51121,37.25676,-80.42107,,yes
+22901,Charlottesville,Virginia,VA,Albemarle,51003,38.08844,-78.55617,,yes
+22801,Harrisonburg,Virginia,VA,Harrisonburg,51660,38.40459,-78.87716,,yes
+24501,Lynchburg,Virginia,VA,Lynchburg,51680,37.353,-79.15576,,yes
+23601,Newport News,Virginia,VA,Newport News,51700,37.05863,-76.46392,,yes
+23502,Norfolk,Virginia,VA,Norfolk,51710,36.86285,-76.20988,,yes
+24011,Roanoke,Virginia,VA,Roanoke,51770,37.27044,-79.94127,,yes
+23451,Virginia Beach,Virginia,VA,Virginia Beach,51810,36.86739,-76.00587,,yes
+23187,Williamsburg,Virginia,VA,Williamsburg,51830,37.26743,-76.72078,,yes
+98101,Seattle,Washington,WA,King,53033,47.6113,-122.33465,,yes
+99201,Spokane,Washington,WA,Spokane,53063,47.66272,-117.43614,,yes
+98402,Tacoma,Washington,WA,Pierce,53053,47.24859,-122.4387,,yes
+54301,Green Bay,Wisconsin,WI,Brown,55009,44.48205,-88.02034,,yes
+53702,Madison,Wisconsin,WI,Waukesha,55133,43.06093,-88.23073,,yes
+53202,Milwaukee,Wisconsin,WI,Milwaukee,55079,43.04513,-87.89819,,yes
+26501,Morgantown,West Virginia,WV,Monongalia,54061,39.63014,-80.04138,,yes

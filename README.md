@@ -17,15 +17,17 @@ produced 74 usable addresses across 47 businesses.
 gms ui --control
 ```
 
-Everything — importing your spreadsheet, creating jobs, scraping, finding
+Everything — managing cities and services, creating jobs, scraping, finding
 emails, exporting — runs from that page as a numbered sequence, with a live log
 and a stop button. Nothing else needs to be memorised.
+
+The 185 cities and 85 services ship in `seeds/` and load on the first
+`gms db migrate`. Add, edit or pause them on the dashboard's **Cities** and
+**Services** pages, which also show how far each one has got.
 
 ### The same thing from the terminal
 
 ```bash
-gms import cities  "your.xlsx" --sheet Cities
-gms import categories "your.xlsx" --sheet Services
 gms plan                       # 185 x 85 = 15,725 jobs
 gms run --workers 4            # scrape Google Maps
 gms enrich emails --workers 8  # crawl websites for addresses
@@ -66,7 +68,7 @@ Then, from anywhere:
 
 ```bash
 gms init          # write gms.config.yaml and create data/
-gms db migrate    # create the database
+gms db migrate    # create the database and load the seeds/ lists
 gms doctor --all  # verify the environment, browser and proxies
 gms ui --control  # open the dashboard and do everything else there
 ```
@@ -76,6 +78,23 @@ gms ui --control  # open the dashboard and do everything else there
 
 **Without installing**, every command also works as `npm run gms -- <command>`
 from the project directory — e.g. `npm run gms -- ui --control`.
+
+## Moving to another machine
+
+Git carries the code and the `seeds/` lists. It does **not** carry `data/`
+(the database, with every lead and every finished search) or `assests/`.
+Both are git-ignored, so a fresh clone on the VPS starts with the full city and
+service lists and an empty queue.
+
+- **Changed the lists on this machine?** Run `gms seeds save` (or click
+  **Save to seeds/** in the dashboard), commit `seeds/`, and pull on the other
+  machine. Then run `gms seeds load` there if its database already exists, since
+  `migrate` only seeds an empty one.
+- **Want the leads and progress too?** Copy the database itself:
+  `gms db backup gms-backup.sqlite`, move that file across, and put it at
+  `data/gms.sqlite` *before* the first `gms db migrate` there.
+- Run the scraper on one machine at a time. Two databases do not merge, so
+  pick the VPS as the one that does the real work.
 
 ## Commands
 
@@ -88,9 +107,11 @@ flags from the CLI itself.
 | `gms init` | Scaffold `gms.config.yaml` and the `data/` tree |
 | `gms doctor [--all]` | Verify Node, the native binding, paths, database, migrations, and — with `--all` — the browser, proxies and Sheets |
 | `gms config show [--resolved]` | Print the merged config with secrets redacted |
+| `gms seeds load\|save` | Load the committed `seeds/` lists, or write the database's lists back to them |
 | `gms import sheets <file>` | List the tabs in a workbook, so you know what to pass to `--sheet` |
 | `gms import cities\|categories <file>` | Load seed data from xlsx/CSV, repairing leading zeros |
 | `gms plan` | Create jobs from seeds (safe to re-run) |
+| `gms queue [--states TX,FL] [--only]` | Choose which searches run first. Spreads across states by default |
 | `gms run` | Scrape Google Maps into the database |
 | `gms enrich emails` | Crawl business websites for contact addresses |
 | `gms status [--by city\|category\|state]` | Queue progress, throughput, ETA |
