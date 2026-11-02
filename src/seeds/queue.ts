@@ -35,6 +35,7 @@ import {
   type CityRecord,
 } from '../db/repositories/seeds.js';
 import { normalizeStateCode } from '../importers/normalize.js';
+import { readHold } from './hold.js';
 
 const AUTOMATION_ID = 'google-maps';
 const PLAN_KEY = 'queue_plan';
@@ -52,11 +53,14 @@ export interface QueuePlan {
 export const DEFAULT_PLAN: QueuePlan = { order: 'spread', states: [], only: false };
 
 /**
- * Priority bands. Each one dominates everything below it, so a focused state
- * always beats weight, and weight always beats position. Positions stay well
+ * Priority bands. Each one dominates everything below it, so a re-scrape beats
+ * a focused state, a focused state always beats weight, and weight always
+ * beats position. A re-scrape is first because the sheet is held until it is
+ * done. Positions stay well
  * under `POSITION_SPAN` (15,725 today); weights are 0–100, so the largest
  * priority is ~1.0e13 — far inside SQLite's 64-bit integers.
  */
+const RESCRAPE_BAND = 100_000_000_000_000;
 const FOCUS_BAND = 10_000_000_000_000;
 const WEIGHT_BAND = 10_000_000;
 const POSITION_SPAN = 10_000_000;
@@ -98,6 +102,8 @@ export function computePriorities(
   categories: ReadonlyMap<number, CategoryRecord>,
   finishedByState: ReadonlyMap<string, number>,
   plan: QueuePlan,
+  /** Jobs of a re-scrape, which run before everything else. */
+  rescrape: ReadonlySet<number> = new Set(),
 ): Map<number, number> {
   const states = [...new Set(jobs.map((j) => j.stateCode))].sort();
   const stateIndex = new Map(states.map((s, i) => [s, i]));
@@ -162,7 +168,8 @@ export function computePriorities(
     const weight = Math.round((categories.get(job.categoryId)?.weight ?? 1) * 100);
     priorities.set(
       job.id,
-      (focus.has(job.stateCode) ? FOCUS_BAND : 0) +
+      (rescrape.has(job.id) ? RESCRAPE_BAND : 0) +
+        (focus.has(job.stateCode) ? FOCUS_BAND : 0) +
         weight * WEIGHT_BAND +
         (POSITION_SPAN - 1 - Math.min(position.get(job.id)!, POSITION_SPAN - 1)),
     );
@@ -205,6 +212,7 @@ export function syncQueue(
       categories,
       seedJobs.finishedByState(),
       plan,
+      new Set(readHold(driver)?.ids ?? []),
     );
     return { statusChanged, reordered: seedJobs.setPriorities(priorities) };
   }, 'immediate');

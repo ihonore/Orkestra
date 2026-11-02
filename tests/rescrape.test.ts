@@ -91,6 +91,24 @@ describe('re-scraping finished searches', () => {
     expect(rescrapeProgress(driver)).toBeNull();
   });
 
+  it('runs the re-scrape before everything else, so the hold lasts hours, not days', () => {
+    // Spread across states, held searches would sit among 15,000 others and
+    // the last of them might not run for days, keeping the sheet waiting.
+    const driver = db();
+    jobs(driver, 'pending', 'pending', 'pending');
+    const finished = jobs(driver, 'done', 'done');
+    requeueFinished(driver);
+
+    const next = driver
+      .prepare<{ id: number }>(
+        `SELECT id FROM jobs WHERE status = 'pending'
+          ORDER BY priority DESC, scheduled_at ASC, id ASC LIMIT 2`,
+      )
+      .all()
+      .map((row) => row.id);
+    expect(next.sort()).toEqual([...finished].sort());
+  });
+
   it('holds nothing when there was nothing to re-read', () => {
     const driver = db();
     expect(requeueFinished(driver)).toBe(0);
