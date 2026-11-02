@@ -81,12 +81,15 @@ export interface EnvLayer {
   readonly values: Record<string, unknown>;
   /** Env var names that contributed, for `gms config show --resolved`. */
   readonly names: readonly string[];
+  /** Dotted config path -> the variable that set it, so errors can name it. */
+  readonly origins: ReadonlyMap<string, string>;
 }
 
 /** Build a partial config object from environment variables. */
 export function readEnvLayer(env: NodeJS.ProcessEnv = process.env): EnvLayer {
   const values: Record<string, unknown> = {};
   const names: string[] = [];
+  const origins = new Map<string, string>();
 
   for (const [name, raw] of Object.entries(env)) {
     if (raw === undefined || !name.startsWith(PREFIX) || RESERVED.has(name)) continue;
@@ -98,7 +101,8 @@ export function readEnvLayer(env: NodeJS.ProcessEnv = process.env): EnvLayer {
 
     assignDeep(values, keyPath, coerce(raw));
     names.push(name);
+    origins.set(keyPath.join('.'), name);
   }
 
-  return { values, names: names.sort() };
+  return { values, names: names.sort(), origins };
 }

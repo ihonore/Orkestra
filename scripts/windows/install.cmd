@@ -1,7 +1,8 @@
 @echo off
 rem GMS installer and updater for Windows. Double-click it.
 rem
-rem First run: installs Node.js and Git if missing, downloads GMS to C:\gms,
+rem First run: installs Node.js and Git if missing, downloads GMS to C:\gms
+rem (or the folder in GMSINSTALL_DIR),
 rem builds it, creates the database with the city and service lists, and puts
 rem "GMS Dashboard" and "Update GMS" shortcuts on the desktop.
 rem Every later run: updates to the latest version. Your data is kept.
@@ -9,8 +10,9 @@ rem
 rem The work is done by the PowerShell below the marker line. This header only
 rem starts it, so the installer stays one file you can copy onto a server.
 setlocal
-set "GMS_SELF=%~f0"
-powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "$s = [IO.File]::ReadAllText($env:GMS_SELF); $i = $s.IndexOf('##' + 'PS1##'); Invoke-Expression $s.Substring($i)"
+rem Deliberately not GMS_*: gms reads every GMS_ variable as a setting.
+set "GMSINSTALL_SELF=%~f0"
+powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "$s = [IO.File]::ReadAllText($env:GMSINSTALL_SELF); $i = $s.IndexOf('##' + 'PS1##'); Invoke-Expression $s.Substring($i)"
 set "CODE=%ERRORLEVEL%"
 echo.
 pause
@@ -26,8 +28,15 @@ $ProgressPreference = 'SilentlyContinue'
 [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
 
 $Repo        = 'https://github.com/ihonore/Orkestra.git'
+# Our own variables are named GMSINSTALL_*, never GMS_*: gms reads every GMS_
+# variable as a config key and refuses to start on one it does not know - an
+# earlier name for the one below stopped the first install at
+# "Unrecognized key: self". Read once and removed, so nothing started from
+# here inherits them.
+$Self        = $env:GMSINSTALL_SELF
 $InstallDir  = 'C:\gms'
-if ($env:GMS_HOME) { $InstallDir = $env:GMS_HOME }
+if ($env:GMSINSTALL_DIR) { $InstallDir = $env:GMSINSTALL_DIR }
+Remove-Item Env:GMSINSTALL_SELF -ErrorAction SilentlyContinue
 $NodeMajor   = 24
 $NodeMinimum = [version]'24.13.0'
 $Arch = 'x64'
@@ -95,7 +104,7 @@ if (($needNode -or $needGit) -and -not (Test-Admin)) {
   Write-Host ''
   Write-Host 'Node.js or Git needs installing, which requires administrator rights.'
   Write-Host 'Approve the prompt; the installer continues in a new window.'
-  Start-Process -FilePath $env:GMS_SELF -Verb RunAs
+  Start-Process -FilePath $Self -Verb RunAs
   exit 0
 }
 
@@ -161,7 +170,7 @@ if ($running) {
 $fresh = -not (Test-Path (Join-Path $InstallDir '.git'))
 if ($fresh) {
   if ((Test-Path $InstallDir) -and (Get-ChildItem -Path $InstallDir -Force | Select-Object -First 1)) {
-    Fail "$InstallDir already exists and is not a GMS install. Move it aside, or set GMS_HOME to another folder."
+    Fail "$InstallDir already exists and is not a GMS install. Move it aside, or set GMSINSTALL_DIR to another folder."
   }
   Step 'Downloading GMS'
   Write-Host 'The repository is private: a GitHub sign-in window may open. Sign in once; Git remembers it.'
@@ -191,7 +200,7 @@ Invoke-Native 'npm.cmd' @('run', 'build')
 # placed next to this installer, becomes the database - but only on a machine
 # that has none yet, so an update can never overwrite real data.
 $database = Join-Path $InstallDir 'data\gms.sqlite'
-$backup = Join-Path (Split-Path -Parent $env:GMS_SELF) 'gms-backup.sqlite'
+$backup = Join-Path (Split-Path -Parent $Self) 'gms-backup.sqlite'
 if (-not (Test-Path $database) -and (Test-Path $backup)) {
   Step 'Using the database backup found next to the installer'
   New-Item -ItemType Directory -Force -Path (Split-Path -Parent $database) | Out-Null

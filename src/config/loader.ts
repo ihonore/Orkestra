@@ -97,12 +97,29 @@ function findFirstExisting(dir: string, filenames: readonly string[]): string | 
   return null;
 }
 
-/** Render a zod error as an indented, human-readable list of field problems. */
-function formatIssues(error: z.ZodError): string {
+/**
+ * Render a zod error as an indented, human-readable list of field problems.
+ *
+ * A problem that came from an environment variable names the variable. Any
+ * `GMS_*` variable is read as a setting, so one set for some other purpose — an
+ * installer's own `GMS_SELF` did exactly this — fails as `Unrecognized key:
+ * "self"`, which points at no file and no flag, and `gms config show` fails the
+ * same way. The variable's name is the only useful thing to say.
+ */
+function formatIssues(error: z.ZodError, envOrigins: ReadonlyMap<string, string>): string {
   return error.issues
     .map((issue) => {
       const where = issue.path.length > 0 ? issue.path.join('.') : '(root)';
-      return `  ${where}: ${issue.message}`;
+      const paths =
+        issue.code === 'unrecognized_keys'
+          ? issue.keys.map((key) => [...issue.path, key].join('.'))
+          : [issue.path.join('.')];
+      const variables = paths
+        .map((p) => envOrigins.get(p))
+        .filter((name): name is string => name !== undefined);
+      const from =
+        variables.length > 0 ? ` (from environment variable ${variables.join(', ')})` : '';
+      return `  ${where}: ${issue.message}${from}`;
     })
     .join('\n');
 }
@@ -189,9 +206,12 @@ export function loadConfig(options: LoadConfigOptions = {}): ResolvedConfig {
 
   const parsed = ConfigSchema.safeParse(merged);
   if (!parsed.success) {
-    throw new ConfigError(`Invalid configuration:\n${formatIssues(parsed.error)}`, {
+    const issues = formatIssues(parsed.error, envLayer.origins);
+    throw new ConfigError(`Invalid configuration:\n${issues}`, {
       code: 'CONFIG_INVALID',
-      hint: 'Run `gms config show` to see the merged configuration.',
+      hint: issues.includes('from environment variable')
+        ? 'Every environment variable starting with GMS_ is read as a setting. Unset the one named above.'
+        : 'Run `gms config show` to see the merged configuration.',
       details: { sources: sources.map((s) => `${s.kind}: ${s.detail}`) },
     });
   }

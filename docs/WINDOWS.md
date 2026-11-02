@@ -16,7 +16,7 @@ It takes about five minutes. The installer:
 
 - installs **Node.js 24** and **Git** if they are missing, and checks every
   download against its published SHA-256 checksum;
-- downloads GMS to `C:\gms` (set `GMS_HOME` first for another folder);
+- downloads GMS to `C:\gms` (set `GMSINSTALL_DIR` first for another folder);
 - installs dependencies, Chromium, and builds;
 - creates the database, with the 185 cities and 85 services from `seeds/`;
 - puts **GMS Dashboard** and **Update GMS** on the desktop, and starts the

@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
+import fs from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { hashConfig, loadConfig } from '../src/config/loader.js';
 import { readEnvLayer } from '../src/config/env.js';
 import { REDACTED, redactSecrets } from '../src/config/redact.js';
@@ -241,5 +243,36 @@ describe('redaction', () => {
   it('leaves values alone when no secret path matches', () => {
     const input = { project: { name: 'gms' } };
     expect(redactSecrets(input)).toEqual(input);
+  });
+});
+
+describe('a stray GMS_ environment variable', () => {
+  // Every GMS_* variable is read as a setting, so one set for another purpose
+  // (the Windows installer's own GMS_SELF) failed as `Unrecognized key: "self"`,
+  // which points at no file and no flag. The error has to name the variable.
+  it('names the variable in the error, and says to unset it', () => {
+    let error: unknown;
+    try {
+      loadConfig({ cwd: tempDir(), env: { GMS_SELF: 'C:\\Users\\me\\install.cmd' } });
+    } catch (caught) {
+      error = caught;
+    }
+    expect(String(error)).toContain('from environment variable GMS_SELF');
+    expect((error as { hint?: string }).hint).toMatch(/Unset the one named above/);
+  });
+
+  it('names a nested variable with a bad value too', () => {
+    expect(() => loadConfig({ cwd: tempDir(), env: { GMS_RUNTIME__WORKERS: 'many' } })).toThrow(
+      /from environment variable GMS_RUNTIME__WORKERS/,
+    );
+  });
+
+  it('is never set by the Windows scripts', () => {
+    const dir = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'scripts', 'windows');
+    for (const file of fs.readdirSync(dir)) {
+      const text = fs.readFileSync(path.join(dir, file), 'utf8');
+      // cmd `set "GMS_X=..."` and PowerShell `$env:GMS_X`.
+      expect(text, file).not.toMatch(/set\s+"?GMS_|\$env:GMS_/i);
+    }
   });
 });
