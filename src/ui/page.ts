@@ -261,7 +261,7 @@ export const PAGE = String.raw`<!doctype html>
   .go:disabled { opacity: .35; cursor: not-allowed; }
 
   .runbar {
-    display: flex; align-items: center; gap: 13px;
+    display: flex; flex-direction: column; gap: 0;
     border: 1px solid var(--rule); background: var(--panel);
     padding: 13px 17px; margin-bottom: 11px;
   }
@@ -312,6 +312,12 @@ export const PAGE = String.raw`<!doctype html>
   .editor input::placeholder { color: var(--faint); }
   .editor .p { color: var(--faint); font-size: 11px; margin-top: 10px; }
   .step details { margin-top: 13px; }
+  .aprow { display: flex; gap: 11px; align-items: center; font-size: 12px; margin-bottom: 6px; }
+  .aprow .nm { min-width: 150px; }
+  .step.autopilot .idx { font-size: 17px; }
+  .runrow { display: flex; align-items: center; gap: 13px; padding: 7px 0; cursor: pointer; }
+  .runrow + .runrow { border-top: 1px solid var(--rule-soft); }
+  .runrow.shown > span:nth-child(2) { color: var(--amber); }
   .good { color: var(--verdigris); }
   .warn { color: var(--amber); }
   .bad { color: var(--rust); }
@@ -370,6 +376,7 @@ export const PAGE = String.raw`<!doctype html>
       <h2>Control</h2>
       <div class="sub" id="ctl-sub"></div>
 
+      <div id="autopilot"></div>
       <div id="steps"></div>
 
       <div class="label" style="margin:30px 0 11px">Activity</div>
@@ -585,9 +592,11 @@ let ctlOverview = null;
 let uploaded = { cities: null, categories: null };
 
 async function loadControl() {
-  const [t, o, q, g] = await Promise.all([
-    get('/api/tasks'), get('/api/overview'), get('/api/queue'), get('/api/sheets/settings')]);
-  ctlState = t; ctlOverview = o; queue = q; sheets = g;
+  const [t, o, q, g, a] = await Promise.all([
+    get('/api/tasks'), get('/api/overview'), get('/api/queue'), get('/api/sheets/settings'),
+    get('/api/autopilot')]);
+  ctlState = t; ctlOverview = o; queue = q; sheets = g; auto = a;
+  renderAutopilot(true);
 
   $('#ctl-sub').textContent = t.enabled
     ? 'Run everything from here. Each step unlocks when the one before it is done.'
@@ -597,7 +606,10 @@ async function loadControl() {
   const hasJobs = o.jobsTotal > 0;
   const hasBusinesses = o.businesses > 0;
   const hasDomains = (o.domains.pending || 0) + (o.domains.done || 0) > 0;
-  const busy = !!t.running;
+  // Each button waits only for its own task: finding emails while a scrape runs
+  // is the normal case, not a conflict.
+  const runningNames = new Set(t.tasks.filter((x) => x.state === 'running').map((x) => x.name));
+  const busy = (name) => runningNames.has(name);
 
   const steps = [
     {
@@ -629,7 +641,7 @@ async function loadControl() {
         '<div class="opts">' +
         '<label>Only these cities</label><input type="text" id="p-cities" placeholder="all" style="width:150px">' +
         '<label>Only these services</label><input type="text" id="p-cats" placeholder="all" style="width:150px">' +
-        '<button class="go" id="do-plan"' + (busy ? ' disabled' : '') + '>Create jobs</button>' +
+        '<button class="go" id="do-plan"' + (busy('plan') ? ' disabled' : '') + '>Create jobs</button>' +
         '</div>',
     },
     {
@@ -665,7 +677,7 @@ async function loadControl() {
         '<label>Workers</label><input type="number" id="r-workers" value="4" min="1" max="16">' +
         '<label>Stop after</label><input type="number" id="r-max" placeholder="all" min="1">' +
         '<label><input type="checkbox" id="r-headful"> Show browser</label>' +
-        '<button class="go" id="do-run"' + (busy ? ' disabled' : '') + '>Start scraping</button>' +
+        '<button class="go" id="do-run"' + (busy('run') ? ' disabled' : '') + '>Start scraping</button>' +
         '</div>',
     },
     {
@@ -677,7 +689,7 @@ async function loadControl() {
         '<div class="opts">' +
         '<label>Workers</label><input type="number" id="e-workers" value="8" min="1" max="32">' +
         '<label>Stop after</label><input type="number" id="e-max" placeholder="all" min="1">' +
-        '<button class="go" id="do-enrich"' + (busy ? ' disabled' : '') + '>Find emails</button>' +
+        '<button class="go" id="do-enrich"' + (busy('enrich') ? ' disabled' : '') + '>Find emails</button>' +
         '</div>',
     },
     {
@@ -691,7 +703,7 @@ async function loadControl() {
         '<label><input type="checkbox" id="x-excel"> Excel-safe zips</label>' +
         '<label><input type="checkbox" id="x-split"> One file per state</label>' +
         '<label><input type="checkbox" id="x-full"> Export everything again</label>' +
-        '<button class="go" id="do-export"' + (busy ? ' disabled' : '') + '>Export CSV</button>' +
+        '<button class="go" id="do-export"' + (busy('export') ? ' disabled' : '') + '>Export CSV</button>' +
         '</div>',
     },
     {
@@ -699,7 +711,7 @@ async function loadControl() {
       why: 'Sends new leads to a Google Sheet anyone can open. Run it again any time — it only sends what is new.',
       blocked: !hasBusinesses, satisfied: false,
       status: sheets.spreadsheetId && sheets.keyFound ? 'ready' : null,
-      body: sheetsBody(busy),
+      body: sheetsBody(busy('export-sheets')),
     },
   ];
 
@@ -727,6 +739,96 @@ async function loadControl() {
 
   if (t.enabled) wireControls();
   renderRun();
+}
+
+// ── Autopilot ──────────────────────────────────────────────────────────
+// The status lines refresh every few seconds; the settings form only when the
+// page reloads it, so a half-typed number is never overwritten.
+let auto = { available: false };
+
+const STAGES = [
+  ['scrape', 'Scrape Google Maps'],
+  ['emails', 'Find emails'],
+  ['sheets', 'Send to the sheet'],
+];
+
+function renderAutopilot(withForm) {
+  const box = $('#autopilot');
+  if (!auto.available) { box.innerHTML = ''; return; }
+  const st = auto.settings, on = st.enabled;
+  const stateDot = { running: 'live', waiting: '', idle: 'ok', blocked: 'bad', off: '' };
+
+  const status =
+    STAGES.map(([key, label]) => {
+      const s = auto.status[key];
+      return '<div class="aprow"><span class="dot ' + stateDot[s.state] + '"></span>' +
+        '<span class="nm">' + esc(label) + '</span><span class="muted">' + esc(s.detail) + '</span></div>';
+    }).join('') +
+    '<div class="aprow"><span class="dot"></span><span class="nm">Memory</span><span class="muted">' +
+    num(auto.memory.freeMb) + ' MB free of ' + num(auto.memory.totalMb) + ' MB · new steps wait below ' +
+    num(st.minFreeMemoryMb) + ' MB</span></div>' +
+    (auto.note ? '<div class="note bad">' + esc(auto.note) + '</div>' : '');
+
+  if (!withForm && $('#ap-status')) {
+    $('#ap-status').innerHTML = status;
+    return;
+  }
+
+  const n = (id, value, min, max, w) =>
+    '<input type="number" id="' + id + '" value="' + esc(value) + '" min="' + min + '" max="' + max + '" style="width:' + (w || 78) + 'px">';
+  const c = (id, value, text) =>
+    '<label><input type="checkbox" id="' + id + '"' + (value ? ' checked' : '') + '> ' + esc(text) + '</label>';
+  const wasOpen = $('#ap-settings')?.open;
+
+  box.innerHTML = '<div class="step autopilot' + (on ? ' satisfied' : ' ready') + '">' +
+    '<div class="idx">&#8635;</div><div>' +
+    '<h3>Autopilot ' + (on ? '<span class="tag complete">on</span>' : '<span class="tag paused">off</span>') + '</h3>' +
+    '<p>Keeps scraping, finds emails as websites come in, and sends new leads with an email to the sheet in batches. ' +
+    'Leave the dashboard open; it carries on after a restart.</p>' +
+    '<div id="ap-status" style="margin-top:12px">' + status + '</div>' +
+    '<details id="ap-settings"' + (wasOpen ? ' open' : '') + '><summary>Settings</summary>' +
+    '<div class="opts">' + c('ap-scrape', st.scrape.enabled, 'Scrape') +
+      '<label>workers</label>' + n('ap-scrape-workers', st.scrape.workers, 1, 8) +
+      '<span class="muted">each is a Chrome using 400–700 MB</span></div>' +
+    '<div class="opts">' + c('ap-emails', st.emails.enabled, 'Find emails') +
+      '<label>workers</label>' + n('ap-emails-workers', st.emails.workers, 1, 32) +
+      '<label>start when</label>' + n('ap-emails-min', st.emails.minSites, 1, 10000) +
+      '<label>websites are waiting</label></div>' +
+    '<div class="opts">' + c('ap-sheets', st.sheets.enabled, 'Send to the sheet') +
+      '<label>every</label>' + n('ap-sheets-batch', st.sheets.batchRows, 50, 10000, 90) +
+      '<label>leads, or every</label>' + n('ap-sheets-wait', st.sheets.maxWaitMinutes, 10, 1440) +
+      '<label>minutes</label>' + c('ap-sheets-email', st.sheets.onlyWithEmail, 'only leads with an email') + '</div>' +
+    '<div class="opts"><label>Start nothing new when free memory is below</label>' +
+      n('ap-memory', st.minFreeMemoryMb, 256, 65536, 90) + '<label>MB</label></div>' +
+    '<div class="opts"><button class="go ghost" id="ap-save">Save settings</button>' +
+      '<button class="go ghost" id="ap-defaults">Recommended settings</button></div>' +
+    '<p style="margin-top:9px">The recommended settings suit a 7 GB VPS on one internet address. ' +
+    'More scrape workers mostly means Google blocks sooner: raise them one at a time and watch the Issues page.</p>' +
+    '</details></div>' +
+    '<div><button class="go' + (on ? ' stop' : '') + '" id="ap-toggle">' + (on ? 'Turn off' : 'Turn on') + '</button></div>' +
+    '</div>';
+
+  const formSettings = (enabled) => ({
+    enabled,
+    scrape: { enabled: $('#ap-scrape').checked, workers: Number($('#ap-scrape-workers').value) },
+    emails: { enabled: $('#ap-emails').checked, workers: Number($('#ap-emails-workers').value),
+      minSites: Number($('#ap-emails-min').value) },
+    sheets: { enabled: $('#ap-sheets').checked, batchRows: Number($('#ap-sheets-batch').value),
+      maxWaitMinutes: Number($('#ap-sheets-wait').value), onlyWithEmail: $('#ap-sheets-email').checked },
+    minFreeMemoryMb: Number($('#ap-memory').value),
+  });
+  const send = async (body) => {
+    const res = await fetch('/api/autopilot', { method: 'POST',
+      headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+    const r = await res.json();
+    if (!res.ok) { alert(r.error); return; }
+    auto = r;
+    loadControl();
+  };
+  $('#ap-toggle').addEventListener('click', () => send(formSettings(!on)));
+  $('#ap-save').addEventListener('click', () => send(formSettings(on)));
+  // Everything but the switch itself, from the server's own defaults.
+  $('#ap-defaults').addEventListener('click', () => send({ enabled: on }));
 }
 
 // ── Google Sheets ──────────────────────────────────────────────────────
@@ -828,23 +930,28 @@ function sheetPicker(id, likely) {
     '<option' + (n === pick ? ' selected' : '') + '>' + esc(n) + '</option>').join('') + '</select>';
 }
 
+/** Which task's output the log shows. null: the newest running one. */
+let shownTaskId = null;
+
 function renderRun() {
-  const t = ctlState.running;
+  const running = ctlState.tasks.filter((x) => x.state === 'running');
   const last = ctlState.tasks[0];
-  const shown = t || last;
+  const shown = ctlState.tasks.find((x) => x.id === shownTaskId) || running[0] || last;
 
-  $('#runbar').innerHTML = shown
-    ? '<span class="dot ' + (t ? 'live' : shown.state === 'succeeded' ? 'ok' : shown.state === 'failed' ? 'bad' : '') + '"></span>' +
-      '<span>' + esc(shown.label) + '</span>' +
-      '<span class="label">' + esc(t ? 'running' : shown.state) + '</span>' +
-      (t ? '<button class="go stop" id="do-stop" style="margin-left:auto">Stop</button>' : '')
-    : '<span class="dot"></span><span class="label">nothing running</span>';
-
-  if (t) $('#do-stop').addEventListener('click', async () => {
-    await fetch('/api/tasks/stop', { method: 'POST', headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ id: t.id }) });
-    loadControl();
-  });
+  const row = (task) => {
+    const live = task.state === 'running';
+    const dot = live ? 'live' : task.state === 'succeeded' ? 'ok' : task.state === 'failed' ? 'bad' : '';
+    return '<div class="runrow' + (task === shown ? ' shown' : '') + '" data-task="' + esc(task.id) + '">' +
+      '<span class="dot ' + dot + '"></span>' +
+      '<span>' + esc(task.label) + '</span>' +
+      '<span class="label">' + esc(live ? 'running · since ' + new Date(task.startedAt).toLocaleTimeString() : task.state) + '</span>' +
+      (live ? '<button class="go stop" data-stop="' + esc(task.id) + '" style="margin-left:auto">Stop</button>' : '') +
+      '</div>';
+  };
+  const rows = running.length ? running : last ? [last] : [];
+  $('#runbar').innerHTML = rows.length
+    ? rows.map(row).join('')
+    : '<div class="runrow"><span class="dot"></span><span class="label">nothing running</span></div>';
 
   const log = $('#log');
   const atBottom = log.scrollTop + log.clientHeight >= log.scrollHeight - 30;
@@ -852,6 +959,20 @@ function renderRun() {
     ? shown.lines.map(readable).join('\n') : 'No output yet.';
   if (atBottom) log.scrollTop = log.scrollHeight;
 }
+
+// One listener for every row: rows are re-rendered every poll.
+$('#runbar').addEventListener('click', async (e) => {
+  const stop = e.target.closest('[data-stop]');
+  if (stop) {
+    stop.disabled = true;
+    await fetch('/api/tasks/stop', { method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ id: stop.dataset.stop }) });
+    loadControl();
+    return;
+  }
+  const rowEl = e.target.closest('[data-task]');
+  if (rowEl) { shownTaskId = rowEl.dataset.task; renderRun(); }
+});
 
 /**
  * Render one output line for a human.
@@ -955,7 +1076,8 @@ function wireControls() {
   const markDirty = () => {
     const dirty = sheetsDirty();
     $('#g-dirty').hidden = !dirty;
-    $('#do-sheets').disabled = !!ctlState.running || !(sheets.spreadsheetId || sheetInput.value.trim());
+    $('#do-sheets').disabled = ctlState.tasks.some((x) => x.name === 'export-sheets' && x.state === 'running') ||
+      !(sheets.spreadsheetId || sheetInput.value.trim());
   };
   if (sheetInput) {
     sheetInput.addEventListener('input', markDirty);
@@ -988,19 +1110,27 @@ function wireControls() {
   });
   on('#do-sheets', async () => {
     if (sheetsDirty() && !(await saveSheets())) return;
-    startTask('export-sheets', { entity: 'leads-flat' });
+    // The same rows autopilot would send, so a manual send and an automatic
+    // one never disagree about what belongs in the sheet.
+    startTask('export-sheets', {
+      entity: auto.settings && auto.settings.sheets.onlyWithEmail === false ? 'leads-flat' : 'leads-with-email' });
   });
 }
 
+let pollCount = 0;
 // While a task runs, poll often enough that the log feels live.
 setInterval(async () => {
   if (!$('#control').classList.contains('on')) return;
   const t = await get('/api/tasks');
-  const wasRunning = !!ctlState.running;
+  const before = new Set(ctlState.tasks.filter((x) => x.state === 'running').map((x) => x.id));
   ctlState = t;
   renderRun();
-  // Re-render the steps when a task finishes: counts and unlocks have changed.
-  if (wasRunning && !t.running) { loadControl(); loadOverview(); }
+  // Re-render the steps when a task finishes, or one starts (autopilot starts
+  // them unprompted): counts, unlocks and button states have changed.
+  const now = new Set(t.tasks.filter((x) => x.state === 'running').map((x) => x.id));
+  const changed = before.size !== now.size || [...now].some((id) => !before.has(id));
+  if (changed) { loadControl(); loadOverview(); return; }
+  if (++pollCount % 4 === 0) { auto = await get('/api/autopilot'); renderAutopilot(false); }
 }, 1500);
 
 // ── Cities and services ───────────────────────────────────────────────

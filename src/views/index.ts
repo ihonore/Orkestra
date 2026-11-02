@@ -138,6 +138,24 @@ const LEADS_NO_EMAIL = leadsFlatSql('b.id > :lastId AND be.link_id IS NULL', 'b.
  */
 const LEADS_WITH_EMAIL = leadsFlatSql('be.link_id > :lastSubId', 'be.link_id');
 
+/**
+ * `leads-flat` without the businesses that have no email: one row per address,
+ * each sent exactly once, in the order they were found.
+ *
+ * The full view sends a business with no email as a blank row, and again with
+ * the address once enrichment finds one — right for a phone list, wrong for a
+ * sheet whose point is email outreach, where it means a blank row per lead and
+ * a second row for the same business later. This view has no such row, so
+ * shipping it in small batches as emails arrive is exact.
+ *
+ * Same columns as `leads-flat`, so both can append to one tab.
+ */
+export const LEADS_WITH_EMAIL_VIEW: RecordSchema = {
+  entity: 'leads-with-email',
+  fields: LEADS_FLAT.fields,
+  sql: LEADS_WITH_EMAIL,
+};
+
 export const BUSINESSES: RecordSchema = {
   entity: 'businesses',
   fields: [
@@ -208,6 +226,7 @@ export const EMAILS: RecordSchema = {
 
 export const VIEWS: Record<string, RecordSchema> = {
   'leads-flat': LEADS_FLAT,
+  'leads-with-email': LEADS_WITH_EMAIL_VIEW,
   businesses: BUSINESSES,
   emails: EMAILS,
 };
@@ -294,6 +313,18 @@ export function readPage(
   limit: number,
 ): Page {
   if (schema.entity === LEADS_FLAT.entity) return readLeadPage(driver, cursor, limit);
+  // Its cursor is the email link, which lives in `lastSubId` exactly as it does
+  // for leads-flat's email stream — so one can continue from the other.
+  if (schema.entity === LEADS_WITH_EMAIL_VIEW.entity) {
+    const rows = driver
+      .prepare<LeadRow>(LEADS_WITH_EMAIL)
+      .all({ lastSubId: cursor.lastSubId, limit });
+    return {
+      rows,
+      next: { lastId: cursor.lastId, lastSubId: rows.at(-1)?.sub_id ?? cursor.lastSubId },
+      done: rows.length === 0,
+    };
+  }
 
   const rows = readRows(driver, schema, cursor.lastId, limit);
   return {
@@ -330,5 +361,38 @@ export function countRemaining(
       countOf(driver, LEADS_NO_EMAIL, { lastId: cursor.lastId })
     );
   }
+  if (schema.entity === LEADS_WITH_EMAIL_VIEW.entity) {
+    return countOf(driver, LEADS_WITH_EMAIL, { lastSubId: cursor.lastSubId });
+  }
   return countOf(driver, schema.sql, { lastId: cursor.lastId });
+}
+
+/**
+ * Where an export of `entity` to a target starts, given both lead cursors there.
+ *
+ * `leads-flat` and `leads-with-email` share one email stream, keyed on the
+ * email link, and can both append to the same tab — the dashboard's button and
+ * autopilot may well use one each. So for either, the email stream resumes
+ * from the *further* of the two cursors: whatever one sent, the other must not
+ * send again. `leads-flat`'s second stream (businesses without an email) is its
+ * own alone.
+ *
+ * Pass `other` as null to ignore it, as `--full` does.
+ */
+export function startingCursor(
+  entity: string,
+  own: ExportCursor | null,
+  other: ExportCursor | null,
+): ExportCursor {
+  const base = own ?? { lastId: 0, lastSubId: 0 };
+  const shared = entity === LEADS_FLAT.entity || entity === LEADS_WITH_EMAIL_VIEW.entity;
+  if (!shared || other === null) return base;
+  return { lastId: base.lastId, lastSubId: Math.max(base.lastSubId, other.lastSubId) };
+}
+
+/** The view whose email stream is shared with `entity`'s, if any. */
+export function sharedLeadEntity(entity: string): string | null {
+  if (entity === LEADS_FLAT.entity) return LEADS_WITH_EMAIL_VIEW.entity;
+  if (entity === LEADS_WITH_EMAIL_VIEW.entity) return LEADS_FLAT.entity;
+  return null;
 }

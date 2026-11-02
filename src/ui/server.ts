@@ -35,6 +35,15 @@ import type { SeedKind } from '../db/repositories/seed-jobs.js';
 import { errorMessage, isAppError } from '../core/errors/taxonomy.js';
 import type { Logger } from '../core/logging/logger.js';
 import { saveSeedFiles } from '../seeds/bundled.js';
+import { MetaRepository } from '../db/repositories/meta.js';
+import { ExportsRepository } from '../db/repositories/exports.js';
+import { VIEWS, countRemaining, sharedLeadEntity, startingCursor } from '../views/index.js';
+import {
+  Autopilot,
+  normalizeAutopilot,
+  type AutopilotSettings,
+  type Snapshot,
+} from './autopilot.js';
 import { queueView, setQueuePlan, syncQueue } from '../seeds/queue.js';
 import {
   addCategory,
@@ -66,6 +75,56 @@ export interface UiServerOptions {
   readonly seedsDir?: string;
   /** Where an uploaded Sheets key is stored. Defaults to ~/gms-credentials. */
   readonly credentialsDir?: string;
+  /** How often autopilot looks for work. Tests shorten it. */
+  readonly autopilotIntervalMs?: number;
+}
+
+const AUTOPILOT_KEY = 'autopilot';
+
+/** What autopilot needs to know, read in one short read-only visit. */
+function autopilotSnapshot(
+  driver: ReturnType<typeof openDatabaseFromConfig>,
+  settings: AutopilotSettings,
+  spreadsheetId: string | null,
+): Snapshot {
+  const count = (sql: string, params: readonly (string | number)[] = []): number =>
+    driver.prepare<{ n: number }>(sql).get(params)?.n ?? 0;
+
+  let rowsUnsent: number | null = null;
+  let lastSentAt: number | null = null;
+  if (spreadsheetId !== null && spreadsheetId !== '') {
+    const entity = settings.sheets.onlyWithEmail ? 'leads-with-email' : 'leads-flat';
+    const partner = sharedLeadEntity(entity)!;
+    const cursors = new ExportsRepository(driver);
+    const own = cursors.position('sheets', spreadsheetId, entity);
+    const other = cursors.position('sheets', spreadsheetId, partner);
+    const toCursor = (row: typeof own) =>
+      row === null ? null : { lastId: row.last_id, lastSubId: row.last_sub_id };
+    rowsUnsent = countRemaining(
+      driver,
+      VIEWS[entity]!,
+      startingCursor(entity, toCursor(own), toCursor(other)),
+    );
+    const last = Math.max(own?.last_at ?? 0, other?.last_at ?? 0);
+    lastSentAt = last > 0 ? last : null;
+  }
+
+  return {
+    // Exactly what a worker could claim: the same conditions as the claim.
+    searchesQueued: count(
+      `SELECT COUNT(*) AS n FROM jobs
+        WHERE automation_id = 'google-maps' AND status = 'pending' AND attempts < max_attempts`,
+    ),
+    // And what the crawler could claim.
+    sitesQueued: count(
+      `SELECT COUNT(*) AS n FROM domains
+        WHERE status = 'pending' AND is_social = 0
+          AND (next_eligible_at IS NULL OR next_eligible_at <= ?)`,
+      [Date.now()],
+    ),
+    rowsUnsent,
+    lastSentAt,
+  };
 }
 
 /** Config paths the Sheets step may write, and nothing else. */
@@ -127,7 +186,7 @@ const COMMANDS: Record<
     build: (input) => {
       const args = ['export', 'sheets'];
       const entity = input['entity'];
-      if (entity === 'businesses' || entity === 'emails' || entity === 'leads-flat') {
+      if (typeof entity === 'string' && EXPORT_ENTITIES.has(entity)) {
         args.push('--entity', entity);
       }
       // A spreadsheet id is [A-Za-z0-9_-]; anything else is not one.
@@ -144,7 +203,7 @@ const COMMANDS: Record<
     build: (input) => {
       const args = ['export', 'csv'];
       const entity = input['entity'];
-      if (entity === 'businesses' || entity === 'emails' || entity === 'leads-flat') {
+      if (typeof entity === 'string' && EXPORT_ENTITIES.has(entity)) {
         args.push('--entity', entity);
       }
       if (input['full'] === true) args.push('--full');
@@ -162,6 +221,9 @@ const COMMANDS: Record<
     build: (input) => buildImport('categories', input),
   },
 };
+
+/** Views the export commands accept, as the CLI's --entity choices. */
+const EXPORT_ENTITIES = new Set(['leads-flat', 'leads-with-email', 'businesses', 'emails']);
 
 function buildImport(what: 'cities' | 'categories', input: Record<string, unknown>): string[] {
   const file = typeof input['file'] === 'string' ? input['file'] : '';
@@ -430,6 +492,60 @@ export function startUiServer(options: UiServerOptions): Promise<RunningServer> 
     }
   }
 
+  // Configuration as it is on disk now, not as it was at startup: step 7
+  // saves the sheet settings while the dashboard runs.
+  const freshConfig = (): ResolvedConfig =>
+    loadConfig({
+      cwd: config.paths.root,
+      ...(options.configFile !== undefined && { configFile: options.configFile }),
+    });
+
+  const autopilot =
+    tasks === null
+      ? null
+      : new Autopilot({
+          tasks,
+          ...(options.logger !== undefined && { logger: options.logger }),
+          ...(options.autopilotIntervalMs !== undefined && {
+            intervalMs: options.autopilotIntervalMs,
+          }),
+          load: () => {
+            try {
+              const driver = openDatabaseFromConfig(config, { readonly: true });
+              try {
+                const raw = new MetaRepository(driver).get(AUTOPILOT_KEY);
+                return normalizeAutopilot(raw === undefined ? {} : JSON.parse(raw));
+              } finally {
+                driver.close();
+              }
+            } catch {
+              return normalizeAutopilot({});
+            }
+          },
+          save: (settings) => {
+            const driver = openDatabaseFromConfig(config);
+            try {
+              new MetaRepository(driver).set(AUTOPILOT_KEY, JSON.stringify(settings));
+            } finally {
+              driver.close();
+            }
+          },
+          snapshot: (settings) => {
+            const spreadsheetId = freshConfig().exporters.sheets.spreadsheetId;
+            const driver = openDatabaseFromConfig(config, { readonly: true });
+            try {
+              return autopilotSnapshot(driver, settings, spreadsheetId ?? null);
+            } finally {
+              driver.close();
+            }
+          },
+          start: (name, input) => {
+            const command = COMMANDS[name];
+            return tasks.start({ name, label: command.label, args: command.build(input) });
+          },
+        });
+  autopilot?.begin();
+
   const server = http.createServer((req, res) => {
     const url = new URL(req.url ?? '/', `http://${host}:${port}`);
 
@@ -564,7 +680,13 @@ export function startUiServer(options: UiServerOptions): Promise<RunningServer> 
         json(res, 200, {
           enabled: options.allowControl === true,
           running: tasks?.running() ?? null,
-          tasks: (tasks?.list() ?? []).slice(0, 12),
+          // Every running task, then the most recent finished ones. A plain
+          // "newest 12" would drop a scrape started days ago once autopilot
+          // had run a dozen exports since.
+          tasks: [
+            ...(tasks?.list() ?? []).filter((t) => t.state === 'running'),
+            ...(tasks?.list() ?? []).filter((t) => t.state !== 'running').slice(0, 8),
+          ],
         });
         return;
       }
@@ -599,7 +721,40 @@ export function startUiServer(options: UiServerOptions): Promise<RunningServer> 
         }
         readBody(req, (body) => {
           const id = (body as { id?: string }).id ?? '';
-          json(res, 200, { stopped: tasks.stop(id) });
+          const task = tasks.get(id);
+          const stopped = tasks.stop(id);
+          // Otherwise autopilot would start it again on its next tick, and the
+          // Stop button would look broken.
+          if (stopped && task !== undefined) {
+            autopilot?.standDown(
+              `Autopilot turned off because you stopped "${task.label}". Turn it on again when you are ready.`,
+            );
+          }
+          json(res, 200, { stopped });
+        });
+        return;
+      }
+
+      if (url.pathname === '/api/autopilot' && req.method === 'GET') {
+        json(
+          res,
+          200,
+          autopilot === null ? { available: false } : { available: true, ...autopilot.view() },
+        );
+        return;
+      }
+
+      if (url.pathname === '/api/autopilot' && req.method === 'POST') {
+        if (autopilot === null) {
+          json(res, 403, { error: 'controls are disabled — restart with --control' });
+          return;
+        }
+        readBody(req, (body) => {
+          try {
+            json(res, 200, { available: true, ...autopilot.update(body) });
+          } catch (error) {
+            json(res, 500, { error: errorMessage(error) });
+          }
         });
         return;
       }
@@ -908,6 +1063,7 @@ export function startUiServer(options: UiServerOptions): Promise<RunningServer> 
           new Promise<void>((done) => {
             // Stop child tasks first: a scrape outliving the dashboard would
             // keep a browser and a job lease with nothing supervising it.
+            autopilot?.end();
             tasks?.stopAll();
             server.close(() => {
               done();

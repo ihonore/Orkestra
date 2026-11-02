@@ -27,9 +27,12 @@ import type { SqliteDriver } from '../src/db/driver/types.js';
 import {
   BUSINESSES,
   LEADS_FLAT,
+  LEADS_WITH_EMAIL_VIEW,
   countRemaining,
   readPage,
+  startingCursor,
   type ExportCursor,
+  type RecordSchema,
 } from '../src/views/index.js';
 import { cleanupTempDirs, tempDir } from './helpers.js';
 
@@ -81,12 +84,13 @@ function exportAll(
   driver: SqliteDriver,
   from: ExportCursor,
   pageSize = 1_000,
+  schema: RecordSchema = LEADS_FLAT,
 ): { rows: Record<string, unknown>[]; cursor: ExportCursor } {
   const rows: Record<string, unknown>[] = [];
   let cursor = from;
 
   for (let guard = 0; guard < 1_000; guard += 1) {
-    const page = readPage(driver, LEADS_FLAT, cursor, pageSize);
+    const page = readPage(driver, schema, cursor, pageSize);
     rows.push(...page.rows);
     cursor = page.next;
     if (page.done) return { rows, cursor };
@@ -275,5 +279,61 @@ describe('single-cursor views are unaffected', () => {
     expect(page.rows).toHaveLength(3);
     expect(page.next.lastId).toBe(3);
     expect(page.next.lastSubId).toBe(0);
+  });
+});
+
+describe('leads with an email only', () => {
+  // The view autopilot sends to the sheet. A business with no email is a blank
+  // row in leads-flat and a second row once enrichment finds an address — fine
+  // for a phone list, noise in a sheet meant for email outreach.
+  it('sends each address once and no businesses without one', () => {
+    const driver = db();
+    const one = addBusiness(driver, 'Biz One');
+    addBusiness(driver, 'Biz Two'); // never gets an email
+    addEmail(driver, one, 'owner@one.com');
+
+    const first = exportAll(driver, START, 1_000, LEADS_WITH_EMAIL_VIEW);
+    expect(emailsIn(first.rows)).toEqual(['owner@one.com']);
+    expect(first.rows).toHaveLength(1);
+
+    addEmail(driver, one, 'sales@one.com');
+    expect(countRemaining(driver, LEADS_WITH_EMAIL_VIEW, first.cursor)).toBe(1);
+    const second = exportAll(driver, first.cursor, 1_000, LEADS_WITH_EMAIL_VIEW);
+    expect(emailsIn(second.rows)).toEqual(['sales@one.com']);
+  });
+
+  it('pages without losing or repeating a row', () => {
+    const driver = db();
+    for (let i = 0; i < 7; i += 1) addEmail(driver, addBusiness(driver, `B${i}`), `a${i}@x.com`);
+    const all = exportAll(driver, START, 2, LEADS_WITH_EMAIL_VIEW);
+    expect(emailsIn(all.rows)).toEqual([0, 1, 2, 3, 4, 5, 6].map((i) => `a${i}@x.com`));
+  });
+
+  it('carries on from a leads-flat export to the same tab, so nothing is sent twice', () => {
+    const driver = db();
+    const one = addBusiness(driver, 'Biz One');
+    addEmail(driver, one, 'owner@one.com');
+    const flat = exportAll(driver, START); // the sheet now has owner@one.com
+    addEmail(driver, one, 'sales@one.com');
+
+    const start = startingCursor('leads-with-email', null, flat.cursor);
+    expect(emailsIn(exportAll(driver, start, 1_000, LEADS_WITH_EMAIL_VIEW).rows)).toEqual([
+      'sales@one.com',
+    ]);
+  });
+
+  it('and the other way round: leads-flat skips what the email-only export sent', () => {
+    const driver = db();
+    const one = addBusiness(driver, 'Biz One');
+    addEmail(driver, one, 'owner@one.com');
+    const emailOnly = exportAll(driver, START, 1_000, LEADS_WITH_EMAIL_VIEW);
+    addBusiness(driver, 'Biz Two');
+
+    const start = startingCursor('leads-flat', null, emailOnly.cursor);
+    const rows = exportAll(driver, start).rows;
+    // Biz One's address is already in the sheet, and a business with an email
+    // never gets a blank row; Biz Two has none yet, so it gets exactly one.
+    expect(emailsIn(rows)).toEqual([]);
+    expect(rows.map((r) => r['name'])).toEqual(['Biz Two']);
   });
 });

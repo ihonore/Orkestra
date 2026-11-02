@@ -65,6 +65,12 @@ the update's `git pull` fail.
 
 ## Day to day
 
+**Turn on Autopilot** at the top of the Control page and leave it. It keeps
+the scrape running, finds emails as websites come in, and sends new leads with
+an email to the sheet every 500 rows or every 2 hours. Its recommended
+settings are sized for this VPS. It turns back on by itself after a reboot,
+once the dashboard starts at sign-in.
+
 - **Keep the "GMS dashboard" window open.** Minimise it, don't close it:
   closing it stops the dashboard and any scrape it started.
 - **Disconnecting from Remote Desktop is fine.** Scrapes keep running. Signing

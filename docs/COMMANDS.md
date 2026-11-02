@@ -533,6 +533,21 @@ A local web page showing progress, leads, failures and exports — and, with
   skipping the handler that finishes in-flight searches and closes the browser.
   A task still running `runtime.shutdownGraceSeconds` + 30 s later is killed.
   Closing the dashboard, or losing it, stops its tasks the same way.
+- **Autopilot** (top of the Control page) runs the pipeline unattended: it keeps
+  the scrape going while searches are queued, starts **Find emails** once
+  25 websites are waiting, and sends new leads to the sheet every 500 rows or
+  every 2 hours, whichever comes first, and once everything has finished.
+  - It presses the same buttons you would, with the same limits, and never
+    starts a second copy of a step that is running.
+  - It starts nothing new while free memory is under 1,024 MB.
+  - A step that fails waits 2 minutes, then 4, 8, and so on up to an hour,
+    rather than being restarted in a loop.
+  - Pressing **Stop** on a step turns autopilot off, so it does not restart
+    what you just stopped.
+  - Its settings live in the database. Left on, it resumes when the
+    dashboard starts, so after a VPS reboot it carries on at sign-in.
+  - **Recommended settings** restores the defaults, which are sized for the
+    7 GB production VPS: 4 scrape workers, 8 email workers.
 - **Step 7 sets up Google Sheets** without editing files. A pasted sheet link
   and tab name go to `gms.config.local.yaml`. A chosen key file is checked to be
   a service-account key (an OAuth client secret is refused by name), saved to
@@ -563,6 +578,13 @@ A local web page showing progress, leads, failures and exports — and, with
 
 All three exports read the database and never change your leads. They resume
 from a stored position, so running them repeatedly only sends what is new.
+
+Entities: `leads-flat` (one row per business and email, including businesses
+with none yet), **`leads-with-email`** (the same columns, only rows with an
+email, each sent once), `businesses` and `emails`. `leads-with-email` is what
+autopilot sends to the sheet by default. A business without an email is a blank
+row in `leads-flat`, then a second row once one is found. In Sheets the two lead
+exports share a tab and a position, so neither re-sends what the other sent.
 
 ### `gms export csv`
 

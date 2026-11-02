@@ -252,7 +252,12 @@ describe('export cursors', () => {
 
 describe('view schemas', () => {
   it('exposes the documented entities', () => {
-    expect(Object.keys(VIEWS).sort()).toEqual(['businesses', 'emails', 'leads-flat']);
+    expect(Object.keys(VIEWS).sort()).toEqual([
+      'businesses',
+      'emails',
+      'leads-flat',
+      'leads-with-email',
+    ]);
   });
 
   it('marks every identifier-shaped field as digits, not number', () => {
@@ -270,14 +275,16 @@ describe('view schemas', () => {
   it('selects an id column for every view, since it is the cursor', () => {
     for (const schema of Object.values(VIEWS)) {
       expect(schema.sql).toMatch(/AS id/i);
-      expect(schema.sql).toContain(':lastId');
+      // `leads-with-email` pages on the email link, the same `lastSubId` cursor
+      // as leads-flat's email stream, which is what lets the two share a tab.
+      expect(schema.sql).toMatch(schema.entity === 'leads-with-email' ? /:lastSubId/ : /:lastId/);
       expect(schema.sql).toContain(':limit');
     }
   });
 
   it('excludes junk emails from every view that joins them', () => {
     // Junk stays in the database for auditing but must never reach an export.
-    for (const schema of [VIEWS['leads-flat'], VIEWS['emails']]) {
+    for (const schema of [VIEWS['leads-flat'], VIEWS['leads-with-email'], VIEWS['emails']]) {
       expect(schema?.sql).toMatch(/is_junk\s*=\s*0/);
     }
   });

@@ -676,3 +676,53 @@ describe('google sheets settings', () => {
     );
   });
 });
+
+describe('autopilot', () => {
+  const post = (url: string, body: unknown) =>
+    fetch(`${url}/api/autopilot`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+
+  it('is unavailable on a read-only dashboard', async () => {
+    const { url } = await serve();
+    expect(await (await fetch(`${url}/api/autopilot`)).json()).toEqual({ available: false });
+    expect((await post(url, { enabled: true })).status).toBe(403);
+  });
+
+  it('starts off, with the recommended settings', async () => {
+    const { url } = await serve({ allowControl: true });
+    const view = (await (await fetch(`${url}/api/autopilot`)).json()) as {
+      settings: { enabled: boolean; scrape: { workers: number } };
+    };
+    expect(view.settings.enabled).toBe(false);
+    expect(view.settings.scrape.workers).toBe(4);
+  });
+
+  it('keeps its settings across a dashboard restart', async () => {
+    const { url, root } = await serve({ allowControl: true });
+    await post(url, { enabled: false, scrape: { workers: 6 }, sheets: { batchRows: 250 } });
+    await running.pop()!.close();
+
+    const config = loadConfig({ cwd: root, env: {} });
+    const again = await startUiServer({ config, port: 0, allowControl: true });
+    running.push(again);
+    const view = (await (await fetch(`${again.url}/api/autopilot`)).json()) as {
+      settings: { scrape: { workers: number }; sheets: { batchRows: number } };
+    };
+    expect(view.settings.scrape.workers).toBe(6);
+    expect(view.settings.sheets.batchRows).toBe(250);
+  });
+
+  it('turned on with nothing to do, starts nothing and says why', async () => {
+    const { url } = await serve({ allowControl: true });
+    const view = (await (await post(url, { enabled: true })).json()) as {
+      status: Record<string, { state: string; detail: string }>;
+    };
+    expect(view.status['scrape']).toMatchObject({ state: 'idle', detail: 'no searches queued' });
+    expect(view.status['sheets']!.detail).toMatch(/step 7/);
+    const tasks = (await (await fetch(`${url}/api/tasks`)).json()) as { tasks: unknown[] };
+    expect(tasks.tasks).toEqual([]);
+  });
+});

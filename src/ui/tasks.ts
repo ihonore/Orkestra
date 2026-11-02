@@ -48,6 +48,13 @@ export interface StartRequest {
 const MAX_LINES = 500;
 
 /**
+ * Finished tasks kept for the Activity panel. Autopilot starts one every few
+ * hours for weeks; each keeps up to MAX_LINES of output, so without a bound the
+ * dashboard's memory would grow for as long as it runs.
+ */
+const MAX_FINISHED = 40;
+
+/**
  * Supervises one task at a time per name.
  *
  * Two concurrent `run` processes would contend for the same job queue — which
@@ -94,6 +101,7 @@ export class TaskManager {
       return { ok: false, error: `${request.label} is already running` };
     }
 
+    this.#prune();
     const id = randomBytes(6).toString('hex');
     const args = [...runtimeArgsFor(this.options.cliEntry), this.options.cliEntry];
     if (this.options.configFile !== undefined) args.push('--config', this.options.configFile);
@@ -189,6 +197,12 @@ export class TaskManager {
     timer.unref();
     this.#killTimers.set(id, timer);
     return true;
+  }
+
+  /** Drop the oldest finished tasks beyond {@link MAX_FINISHED}. */
+  #prune(): void {
+    const finished = this.list().filter((t) => t.state !== 'running');
+    for (const task of finished.slice(MAX_FINISHED)) this.#tasks.delete(task.id);
   }
 
   #forget(id: string): void {

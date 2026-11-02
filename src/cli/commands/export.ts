@@ -20,6 +20,8 @@ import {
   readPage,
   type ExportCursor,
   type ExportRow,
+  sharedLeadEntity,
+  startingCursor,
 } from '../../views/index.js';
 import { formatBytes, heading, keyValue, style, symbol } from '../output.js';
 import fs from 'node:fs';
@@ -221,7 +223,17 @@ export async function runExportSheets(options: ExportSheetsOptions): Promise<voi
 
   try {
     if (options.full === true) cursors.reset('sheets', spreadsheetId, entity);
-    const start = cursors.cursor('sheets', spreadsheetId, entity);
+    const toCursor = (row: { last_id: number; last_sub_id: number } | null) =>
+      row === null ? null : { lastId: row.last_id, lastSubId: row.last_sub_id };
+    const partner = sharedLeadEntity(entity);
+    const start = startingCursor(
+      entity,
+      toCursor(cursors.position('sheets', spreadsheetId, entity)),
+      // --full means "send everything again", so it must not skip ahead.
+      partner === null || options.full === true
+        ? null
+        : toCursor(cursors.position('sheets', spreadsheetId, partner)),
+    );
 
     const exporter = new SheetsExporter({
       spreadsheetId,

@@ -465,7 +465,7 @@ export function buildProgram(): Command {
     .description('export to CSV, resuming from the last position')
     .addOption(
       new Option('-e, --entity <name>', 'what to export')
-        .choices(['leads-flat', 'businesses', 'emails'])
+        .choices(['leads-flat', 'leads-with-email', 'businesses', 'emails'])
         .default('leads-flat'),
     )
     .option('-o, --out-dir <path>', 'output directory (default: dataDir/exports)')
@@ -513,7 +513,7 @@ export function buildProgram(): Command {
     .description('push results to a shared Google Sheet, resuming from the last position')
     .addOption(
       new Option('-e, --entity <name>', 'what to export')
-        .choices(['leads-flat', 'businesses', 'emails'])
+        .choices(['leads-flat', 'leads-with-email', 'businesses', 'emails'])
         .default('leads-flat'),
     )
     .option('-s, --spreadsheet-id <id>', 'from the sheet URL (overrides config)')
