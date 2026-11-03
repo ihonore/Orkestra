@@ -20,6 +20,7 @@ import {
 import {
   cleanAddress,
   confidenceFor,
+  belongsElsewhere,
   validateEmail,
 } from '../src/enrichment/website-emails/validate/rules.js';
 import {
@@ -604,6 +605,10 @@ describe('template placeholders and invented endings', () => {
     'me@mydomain.net',
     'support@yourdomain.tld',
     'admin@server.local',
+    'example@mail.com',
+    'firstname.lastname@tkelevator.com',
+    'mymail@mailservice.com',
+    'email@address.com',
   ])('rejects %s', (address) => {
     expect(validateEmail(address).isJunk).toBe(true);
   });
@@ -615,7 +620,45 @@ describe('template placeholders and invented endings', () => {
     'office@acme.agency',
     'counsel@smith.lawyer',
     'owner@acme.co.uk',
+    'email@rockyheights.com',
   ])('keeps the real address %s', (address) => {
     expect(validateEmail(address).isJunk).toBe(false);
+  });
+});
+
+describe("addresses on a business's site that belong to someone else", () => {
+  const judge = (address: string, site: string | null, name: string) => {
+    const v = validateEmail(address);
+    return belongsElsewhere(v, site, name);
+  };
+
+  // All from the real data.
+  it.each([
+    ['support@overfuel.com', 'akunitedauto.com', 'United Auto Sales'],
+    ['contact@bizsite.link', 'lomyu.me', 'Street Custom - T N T Body Shop'],
+    ['bugreport@moatable.com', 'birchequity.co', 'Birch Equity'],
+    ['rglegalinquiries@realgeeks.com', 'beautifulalaska.com', 'Beautiful Alaska Realty'],
+    ['compliance@curaytor.com', 'bhamrealtyco.com', 'Bham Realty'],
+    ['privacy@nva.com', 'alaskaveterinaryclinic.com', 'Alaska Veterinary Clinic'],
+  ])('flags %s on %s', (address, site, name) => {
+    expect(judge(address, site, name)).toBe(true);
+  });
+
+  it.each([
+    // The business's own second domain, in its various disguises.
+    ['info@rmgaragedoors.com', 'redmountaingaragedoors.com', 'Red Mountain Garage Door'],
+    ['info@dewaragency.com', 'dewarinsuranceagency.com', 'Dewar Insurance Agency'],
+    ['office@chugachseweranddrain.net', 'chugachsewerdrain.com', 'Chugach Sewer & Drain'],
+    ['info@sosalaska.com', 'sosrestorationak.com', 'SOS Restoration LLC'],
+    ['info@akmboa.com', 'mortgagebrokersofalaska.com', 'Mortgage Brokers of Alaska, LLC'],
+    ['info@ntreak.com', 'northerntrustrealestate.com', 'Northern Trust Real Estate'],
+    // A real person at the parent group, not a mailbox.
+    ['jeffswickard@swickard.com', 'swickardanchorage.com', 'Swickard Anchorage'],
+    ['kwalton@lithia.com', 'anchoragechevrolet.com', 'Chevrolet of South Anchorage'],
+    // The business's own domain, and free mail.
+    ['privacy@classiccollision.com', 'classiccollision.com', 'Classic Collision'],
+    ['info@gmail.com', 'acme.com', 'Acme'],
+  ])('keeps %s on %s', (address, site, name) => {
+    expect(judge(address, site, name)).toBe(false);
   });
 });

@@ -27,6 +27,24 @@ export interface RecordSchema {
   readonly sql: string;
 }
 
+/** SQL list literal from known-safe constant words. */
+const sqlList = (words: readonly string[]): string => `(${words.map((w) => `'${w}'`).join(', ')})`;
+
+/**
+ * Generic addresses that are a poor first choice for a business: nobody who
+ * buys reads privacy@ or careers@. Still exported, ranked last.
+ */
+// prettier-ignore
+const LOW_VALUE_LOCAL_PARTS = [
+  'privacy', 'legal', 'compliance', 'abuse', 'dmca', 'copyright',
+  'postmaster', 'hostmaster', 'webmaster',
+  'noreply', 'no-reply', 'donotreply', 'do-not-reply', 'unsubscribe', 'bounce', 'bounces',
+  'bugreport', 'bugs', 'security',
+  'careers', 'jobs', 'hr', 'recruiting', 'recruitment', 'hiring',
+  'billing', 'accounts', 'accounting', 'invoices', 'payables', 'payroll', 'ap', 'ar',
+  'press', 'media',
+] as const;
+
 /**
  * `digits` is a distinct kind from `text` for one reason.
  *
@@ -113,7 +131,9 @@ function leadsFlatSql(where: string, orderBy: string): string {
              e.address, e.is_role, e.is_free
         FROM business_emails be
         JOIN emails e ON e.id = be.email_id
-       WHERE e.is_junk = 0
+       -- off_site: the site's builder's or a vendor's address, not the
+       -- business's (support@overfuel.com on a dealer's site). See rules.ts.
+       WHERE e.is_junk = 0 AND be.off_site = 0
     ) be ON be.business_id = b.id
     LEFT JOIN domains d ON d.id = b.domain_id
     LEFT JOIN business_sightings s ON s.id = (
@@ -164,7 +184,8 @@ export const LEADS_WITH_EMAIL_VIEW: RecordSchema = {
  * "Best" is the address most likely to reach someone who can buy: a named
  * person at the business's own domain, then a role address there (info@,
  * contact@), then anything else that is not free mail, then free mail
- * (gmail.com), and within each, the extractor's confidence.
+ * (gmail.com), and within each, the extractor's confidence. Addresses nobody
+ * who buys reads — privacy@, careers@, noreply@ — come after all of those.
  *
  * ## Why it can be sent once, and complete
  *
@@ -179,16 +200,20 @@ export const LEADS_WITH_EMAIL_VIEW: RecordSchema = {
 const LEADS_BY_BUSINESS_SQL = `
     WITH links AS (
       SELECT be.rowid AS link_id, be.business_id, be.confidence,
-             e.address, e.is_role, e.is_free, e.email_domain
+             e.address, e.is_role, e.is_free, e.email_domain,
+             e.local_part IN ${sqlList(LOW_VALUE_LOCAL_PARTS)} AS low_value
         FROM business_emails be
         JOIN emails e ON e.id = be.email_id
-       WHERE e.is_junk = 0
+       -- off_site: the site's builder's or a vendor's address, not the
+       -- business's (support@overfuel.com on a dealer's site). See rules.ts.
+       WHERE e.is_junk = 0 AND be.off_site = 0
     ),
     ranked AS (
       SELECT l.*,
              ROW_NUMBER() OVER (
                PARTITION BY l.business_id
-               ORDER BY (l.email_domain = d.domain AND l.is_role = 0 AND l.is_free = 0) DESC,
+               ORDER BY l.low_value ASC,
+                        (l.email_domain = d.domain AND l.is_role = 0 AND l.is_free = 0) DESC,
                         (l.email_domain = d.domain) DESC,
                         l.is_free ASC,
                         l.is_role ASC,

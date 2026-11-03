@@ -289,3 +289,35 @@ describe('configuration errors', () => {
     await expect(sheets.prepare(LEADS_FLAT)).rejects.toThrow(/does not exist/);
   });
 });
+
+describe('rebuilding a tab', () => {
+  // The sheet is append-only, so a correction to rows already sent (a vendor's
+  // address dropped, privacy@ ranked last) needs the tab sent again.
+  const schema = { entity: 'x', fields: [text], sql: '' };
+
+  it('deletes every row below the header, keeping the header', async () => {
+    const { mock, sheets } = await exporter({ tabs: [{ title: 'Leads', sheetId: 7, rows: 500 }] });
+    expect(await sheets.clearBelowHeader(schema)).toBe(499);
+    const deletes = mock.requests
+      .flatMap(
+        (r) =>
+          ((r.body as { requests?: unknown[] } | null)?.requests ?? []) as Record<
+            string,
+            unknown
+          >[],
+      )
+      .map((r) => r['deleteDimension'])
+      .filter((d) => d !== undefined);
+    expect(deletes).toEqual([
+      { range: { sheetId: 7, dimension: 'ROWS', startIndex: 1, endIndex: 500 } },
+    ]);
+  });
+
+  it('does nothing to a tab that only has its header', async () => {
+    const { mock, sheets } = await exporter({ tabs: [{ title: 'Leads', sheetId: 7, rows: 1 }] });
+    expect(await sheets.clearBelowHeader(schema)).toBe(0);
+    expect(
+      mock.requests.some((r) => JSON.stringify(r.body ?? '').includes('deleteDimension')),
+    ).toBe(false);
+  });
+});

@@ -93,3 +93,55 @@ export function rescrapeProgress(driver: SqliteDriver): RescrapeProgress | null 
       .get([JSON.stringify(hold.ids)])?.n ?? 0;
   return remaining === 0 ? null : { total: hold.ids.length, remaining };
 }
+
+const REBUILD_KEY = 'sheets_rebuild_pending';
+/**
+ * Set once the rebuild for the email-ownership fix has been requested.
+ * Bump the suffix for a future fix that changes rows already sent.
+ */
+const OWNERSHIP_FIX_KEY = 'sheets_rebuild_requested_ownership_v1';
+
+/**
+ * Ask for the sheet tab of `entity` to be cleared and sent again from scratch.
+ *
+ * For corrections to rows already sent: the sheet is append-only, so a rule
+ * that now drops a vendor's address, or ranks privacy@ last, would otherwise
+ * only reach rows sent from now on. Autopilot carries it out at its next
+ * chance; `gms export sheets --rebuild` does it directly.
+ */
+export function requestSheetRebuild(driver: SqliteDriver, entity: string): void {
+  new MetaRepository(driver).set(REBUILD_KEY, entity);
+}
+
+/** The entity whose tab is waiting to be rebuilt, if any. */
+export function pendingSheetRebuild(driver: SqliteDriver): string | null {
+  return new MetaRepository(driver).get(REBUILD_KEY) ?? null;
+}
+
+/** Mark a rebuild done. Only clears it if it was for this entity. */
+export function clearSheetRebuild(driver: SqliteDriver, entity: string): void {
+  if (pendingSheetRebuild(driver) !== entity) return;
+  driver.prepare(`DELETE FROM meta WHERE key = ?`).run([REBUILD_KEY]);
+}
+
+/**
+ * The one-time rebuild after the email-ownership fix, requested by
+ * `gms db migrate`: rows already in "Leads by business" carry builders' and
+ * vendors' addresses, and privacy@ as a best address. Only requested where
+ * that tab has actually been sent to. Returns whether it was requested.
+ */
+export function requestRebuildAfterOwnershipFix(driver: SqliteDriver): boolean {
+  const meta = new MetaRepository(driver);
+  if (meta.get(OWNERSHIP_FIX_KEY) !== undefined) return false;
+  meta.set(OWNERSHIP_FIX_KEY, String(Date.now()));
+  const sent =
+    driver
+      .prepare<{ n: number }>(
+        `SELECT COUNT(*) AS n FROM export_cursors
+          WHERE exporter = 'sheets' AND entity = 'leads-by-business' AND rows_total > 0`,
+      )
+      .get()?.n ?? 0;
+  if (sent === 0) return false;
+  requestSheetRebuild(driver, 'leads-by-business');
+  return true;
+}

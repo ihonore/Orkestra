@@ -10,6 +10,10 @@ import { openDatabase } from '../src/db/client.js';
 import { migrate } from '../src/db/migrate.js';
 import type { SqliteDriver } from '../src/db/driver/types.js';
 import {
+  clearSheetRebuild,
+  pendingSheetRebuild,
+  requestRebuildAfterOwnershipFix,
+  requestSheetRebuild,
   requeueAfterExtractionFix,
   requeueFinished,
   rescrapeProgress,
@@ -125,5 +129,36 @@ describe('the re-scrape after the extraction fix', () => {
     // Later finished searches were scraped with the fixed code: never again.
     driver.prepare(`UPDATE jobs SET status = 'done'`).run();
     expect(requeueAfterExtractionFix(driver)).toBe(0);
+  });
+});
+
+describe('rebuilding the sheet tab after a correction', () => {
+  const sent = (driver: SqliteDriver, entity: string) =>
+    driver
+      .prepare(
+        `INSERT INTO export_cursors (exporter, target, entity, last_id, last_sub_id, rows_total, last_at)
+         VALUES ('sheets', 'sheet-id', ?, 0, 10, 10, 0)`,
+      )
+      .run([entity]);
+
+  it('is requested once, and only where the tab has been sent to', () => {
+    const driver = db();
+    expect(requestRebuildAfterOwnershipFix(driver)).toBe(false);
+    expect(pendingSheetRebuild(driver)).toBeNull();
+
+    const other = db();
+    sent(other, 'leads-by-business');
+    expect(requestRebuildAfterOwnershipFix(other)).toBe(true);
+    expect(pendingSheetRebuild(other)).toBe('leads-by-business');
+    expect(requestRebuildAfterOwnershipFix(other)).toBe(false);
+  });
+
+  it('is cleared only by the rebuild it was for', () => {
+    const driver = db();
+    requestSheetRebuild(driver, 'leads-by-business');
+    clearSheetRebuild(driver, 'leads-with-email');
+    expect(pendingSheetRebuild(driver)).toBe('leads-by-business');
+    clearSheetRebuild(driver, 'leads-by-business');
+    expect(pendingSheetRebuild(driver)).toBeNull();
   });
 });

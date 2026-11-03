@@ -14,6 +14,7 @@ import { openDatabaseFromConfig } from '../../db/client.js';
 import { ExportsRepository } from '../../db/repositories/exports.js';
 import { CsvWriter, groupKeyFor } from '../../exporters/csv.js';
 import { SheetsExporter, estimateMinutes } from '../../exporters/sheets.js';
+import { clearSheetRebuild } from '../../seeds/rescrape.js';
 import {
   VIEWS,
   countRemaining,
@@ -188,6 +189,11 @@ export interface ExportSheetsOptions {
   readonly spreadsheetId?: string;
   readonly sheetName?: string;
   readonly full?: boolean;
+  /**
+   * Clear the tab below its header and send everything again. For corrections
+   * to rows already sent, which an append-only export cannot otherwise reach.
+   */
+  readonly rebuild?: boolean;
   readonly json?: boolean;
 }
 
@@ -227,15 +233,16 @@ export async function runExportSheets(options: ExportSheetsOptions): Promise<voi
   const cursors = new ExportsRepository(driver);
 
   try {
-    if (options.full === true) cursors.reset('sheets', spreadsheetId, entity);
+    const fromScratch = options.full === true || options.rebuild === true;
+    if (fromScratch) cursors.reset('sheets', spreadsheetId, entity);
     const toCursor = (row: { last_id: number; last_sub_id: number } | null) =>
       row === null ? null : { lastId: row.last_id, lastSubId: row.last_sub_id };
     const partner = sharedLeadEntity(entity);
     const start = startingCursor(
       entity,
       toCursor(cursors.position('sheets', spreadsheetId, entity)),
-      // --full means "send everything again", so it must not skip ahead.
-      partner === null || options.full === true
+      // --full and --rebuild mean "send everything again", so no skipping ahead.
+      partner === null || fromScratch
         ? null
         : toCursor(cursors.position('sheets', spreadsheetId, partner)),
     );
@@ -250,9 +257,21 @@ export async function runExportSheets(options: ExportSheetsOptions): Promise<voi
     });
 
     const room = await exporter.prepare(schema);
+    if (options.rebuild === true) {
+      const cleared = await exporter.clearBelowHeader(schema);
+      if (options.json !== true) {
+        console.log(style.grey(`Cleared ${cleared.toLocaleString()} row(s) from "${sheetName}".`));
+      }
+    }
     const pending = countRemaining(driver, schema, start);
+    // Done once the tab holds everything again; a rebuild that fails part-way
+    // stays requested, and the next attempt clears and starts over.
+    const finishRebuild = (): void => {
+      if (options.rebuild === true) clearSheetRebuild(driver, entity);
+    };
 
     if (pending === 0) {
+      finishRebuild();
       console.log(
         style.grey(
           start.lastId > 0 || start.lastSubId > 0
@@ -327,6 +346,7 @@ export async function runExportSheets(options: ExportSheetsOptions): Promise<voi
         },
       );
     }
+    finishRebuild();
 
     if (options.json === true) {
       console.log(JSON.stringify({ entity, written, requests, retries, cursor }, null, 2));

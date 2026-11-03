@@ -243,6 +243,8 @@ export class SheetsExporter {
   readonly #sheetName: string;
   #lock: Promise<unknown> = Promise.resolve();
   #sheetId: number | null = null;
+  /** Rows the tab had when prepared, header included. */
+  #rowCount = 0;
 
   constructor(private readonly options: SheetsExportOptions) {
     if (options.spreadsheetId.trim() === '') {
@@ -309,9 +311,39 @@ export class SheetsExporter {
       this.#sheetId = await this.#createTab(schema);
     } else {
       this.#sheetId = existing.properties?.sheetId ?? null;
+      this.#rowCount = existing.properties?.gridProperties?.rowCount ?? 0;
     }
 
     return { cellsUsed, cellsFree: Math.max(0, MAX_CELLS_PER_SPREADSHEET - cellsUsed) };
+  }
+
+  /**
+   * Delete every row below the header, so the tab can be sent again from
+   * scratch. Deleting rather than blanking them returns the cells to the
+   * spreadsheet's 10-million-cell budget. Only for a tab this tool writes: the
+   * caller decides that, and the header row stays so the columns keep their
+   * names, freeze and any filters.
+   */
+  async clearBelowHeader(schema: RecordSchema): Promise<number> {
+    if (this.#sheetId === null) await this.prepare(schema);
+    const sheetId = this.#sheetId;
+    if (sheetId === null) throw new Error('sheet tab was not prepared');
+    const removed = Math.max(0, this.#rowCount - 1);
+    if (removed === 0) return 0;
+    await this.#api.spreadsheets.batchUpdate({
+      spreadsheetId: this.#spreadsheetId,
+      requestBody: {
+        requests: [
+          {
+            deleteDimension: {
+              range: { sheetId, dimension: 'ROWS', startIndex: 1, endIndex: this.#rowCount },
+            },
+          },
+        ],
+      },
+    });
+    this.#rowCount = 1;
+    return removed;
   }
 
   async #createTab(schema: RecordSchema): Promise<number> {

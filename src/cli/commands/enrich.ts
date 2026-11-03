@@ -16,8 +16,9 @@ import {
   type CrawlResult,
   startUrlFor,
 } from '../../enrichment/website-emails/crawler.js';
-import { validateEmail } from '../../enrichment/website-emails/validate/rules.js';
+import { belongsElsewhere, validateEmail } from '../../enrichment/website-emails/validate/rules.js';
 import { openDatabaseFromConfig } from '../../db/client.js';
+import type { SqliteDriver } from '../../db/driver/types.js';
 import { EmailsRepository } from '../../db/repositories/emails.js';
 import { formatBytes, formatDuration, heading, keyValue, style, symbol } from '../output.js';
 import path from 'node:path';
@@ -68,24 +69,13 @@ export async function runEnrichEmails(options: EnrichCommandOptions): Promise<vo
     1_800_000,
     config.enrichment.websiteEmails.maxTimePerDomainMs * 10,
   );
-  // Re-judge what is already stored. Rules improve — the placeholder and
-  // invented-ending checks arrived after thousands of addresses had been kept —
-  // and a verdict made once at crawl time would otherwise stand forever, so
-  // info@youwebsite.com would keep reaching the sheet.
-  const validation = {
-    excludeGovernment: config.enrichment.websiteEmails.validation.excludeGovernment,
-    excludeEducation: config.enrichment.websiteEmails.validation.excludeEducation,
-    blockedDomains: config.enrichment.websiteEmails.validation.blockedDomains,
-  };
-  const rejects = emails
-    .storedVerdicts()
-    .filter((row) => row.is_junk === 0)
-    .map((row) => ({ id: row.id, verdict: validateEmail(row.address, validation) }))
-    .filter((row) => row.verdict.isJunk)
-    .map((row) => ({ id: row.id, reason: row.verdict.junkReason ?? 'placeholder' }));
-  const rejudged = emails.markJunk(rejects);
-  if (rejudged > 0)
-    logger.info({ count: rejudged }, 'stored addresses now rejected by newer rules');
+  const rejudged = rejudgeStoredEmails(driver, config);
+  if (rejudged.junked > 0) {
+    logger.info({ count: rejudged.junked }, 'stored addresses now rejected by newer rules');
+  }
+  if (rejudged.ownership > 0) {
+    logger.info({ count: rejudged.ownership }, "email links re-judged as someone else's");
+  }
 
   const reclaimed = emails.reclaimStalledDomains(domainLeaseMs);
   if (reclaimed > 0) {
@@ -178,6 +168,7 @@ export async function runEnrichEmails(options: EnrichCommandOptions): Promise<vo
               emails.link({
                 businessId: business.id,
                 emailId,
+                offSite: belongsElsewhere(found.verdict, domain.domain, business.name),
                 sourceUrl: found.sourceUrl,
                 sourceDomainId: domain.id,
                 method: found.method,
@@ -314,4 +305,53 @@ export async function runEnrichEmails(options: EnrichCommandOptions): Promise<vo
     if (driver.open) driver.close();
     shutdown.exitWhenIdle();
   }
+}
+
+/**
+ * Re-judge what is already stored against the current rules.
+ *
+ * Rules improve — placeholder checks, invented domain endings and the
+ * builder's-address rule all arrived after thousands of addresses had been
+ * kept — and a verdict made once at crawl time would otherwise stand forever,
+ * so info@youwebsite.com and support@overfuel.com would keep reaching the
+ * sheet. Run when the email crawl starts and by `gms db migrate`, so an update
+ * applies its new rules before anything is exported.
+ *
+ * Junk is only ever added here; ownership is recomputed both ways, because a
+ * re-scrape can correct a business's name or website.
+ */
+export function rejudgeStoredEmails(
+  driver: SqliteDriver,
+  config: ResolvedConfig,
+): { junked: number; ownership: number } {
+  const emails = new EmailsRepository(driver);
+  const validation = {
+    excludeGovernment: config.enrichment.websiteEmails.validation.excludeGovernment,
+    excludeEducation: config.enrichment.websiteEmails.validation.excludeEducation,
+    blockedDomains: config.enrichment.websiteEmails.validation.blockedDomains,
+  };
+  const rejects = emails
+    .storedVerdicts()
+    .filter((row) => row.is_junk === 0)
+    .map((row) => ({ id: row.id, verdict: validateEmail(row.address, validation) }))
+    .filter((row) => row.verdict.isJunk)
+    .map((row) => ({ id: row.id, reason: row.verdict.junkReason ?? 'placeholder' }));
+  const junked = emails.markJunk(rejects);
+
+  const ownership = emails.setOffSite(
+    emails.linksForReview().map((link) => ({
+      rowid: link.rowid,
+      offSite: belongsElsewhere(
+        {
+          localPart: link.local_part,
+          domain: link.email_domain,
+          isRole: link.is_role === 1,
+          isFree: link.is_free === 1,
+        },
+        link.site,
+        link.name,
+      ),
+    })),
+  );
+  return { junked, ownership };
 }

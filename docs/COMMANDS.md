@@ -587,6 +587,16 @@ Entities:
   (info@, contact@), then other business mail, then free mail like Gmail. A
   business is sent once, with all the addresses its website crawl found. One
   that gains an address on a recrawl months later is not sent again.
+  Generic addresses nobody who buys reads (privacy@, legal@, careers@,
+  noreply@, billing@) rank below every other address.
+- In every lead export, an address is left out for a business when it belongs
+  to someone else: a generic or system mailbox on a domain unrelated to the
+  business's website and name, such as `support@overfuel.com` on a dealer's
+  site or `contact@bizsite.link` on a site built with it. People at a parent
+  group (`jeffswickard@swickard.com`) and the business's own second domains
+  (`info@rmgaragedoors.com` for Red Mountain Garage Doors) are kept. This is
+  judged when the email is found, and again for stored emails each time the
+  email crawl starts and on `gms db migrate`.
 - `leads-with-email`: one row per address, only businesses with an email.
 - `leads-flat`: one row per address, plus businesses with none yet. Such a
   business is a blank row now, then a second row once an email is found.
@@ -683,6 +693,12 @@ searches is still waiting, autopilot sends nothing to the sheet. The panel
 shows "holding until the re-scrape finishes: N of M searches re-read", and
 sending resumes by itself afterwards. The **Re-scrape finished searches**
 button on the Issues page does the same on demand.
+
+When an update changes rows the sheet already has, migrate asks for the tab to
+be **rebuilt** once: cleared below its header and sent again from scratch.
+Autopilot does this at its next chance (after any re-scrape), and
+`gms export sheets --rebuild` does it by hand. Anything typed into the tab's
+rows is lost, so keep notes in other columns or another tab.
 
 Use `gms db backup`, never `cp`: copying an open SQLite database picks up the
 `-wal` and `-shm` sidecars inconsistently and yields a file that may not open.

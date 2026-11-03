@@ -8,7 +8,11 @@ import { checkIntegrity, describeDatabase, openDatabaseFromConfig } from '../../
 import { appliedMigrations, migrate, pendingMigrations } from '../../db/migrate.js';
 import { MetaRepository, META_KEYS } from '../../db/repositories/meta.js';
 import { loadBundledSeedsOnce } from '../../seeds/bundled.js';
-import { requeueAfterExtractionFix } from '../../seeds/rescrape.js';
+import {
+  requeueAfterExtractionFix,
+  requestRebuildAfterOwnershipFix,
+} from '../../seeds/rescrape.js';
+import { rejudgeStoredEmails } from './enrich.js';
 import { APP_VERSION } from '../../version.js';
 import { formatBytes, formatDuration, heading, keyValue, style, symbol } from '../output.js';
 
@@ -75,6 +79,22 @@ export function runDbMigrate(options: DbCommandOptions & { dryRun: boolean }): v
     // name or website. Re-reading their searches corrects them in place, and
     // autopilot holds the sheet until it is done — so updating the VPS is the
     // only action needed. Once per database.
+    // New email rules apply to what is already stored before anything is
+    // exported again — and if they change rows the sheet already has, its
+    // tab is rebuilt once (by autopilot, at its next chance).
+    const rejudged = rejudgeStoredEmails(driver, options.config);
+    if (rejudged.junked + rejudged.ownership > 0) {
+      console.log(
+        `${symbol.ok} re-checked stored emails: ${rejudged.junked} now rejected, ` +
+          `${rejudged.ownership} found to belong to a site's builder or a vendor`,
+      );
+    }
+    if (requestRebuildAfterOwnershipFix(driver)) {
+      console.log(
+        `${symbol.ok} the "Leads by business" tab will be rebuilt once with the corrected emails`,
+      );
+    }
+
     const requeued = requeueAfterExtractionFix(driver);
     if (requeued > 0) {
       console.log(

@@ -420,6 +420,36 @@ describe('one row per business', () => {
     expect(countRemaining(driver, LEADS_BY_BUSINESS, START)).toBe(9);
   });
 
+  it("leaves out an address that belongs to the site's builder or a vendor", () => {
+    const driver = db();
+    const id = addBusiness(driver, 'United Auto Sales');
+    addEmail(driver, id, 'sales@akunitedauto.com');
+    addEmail(driver, id, 'support@overfuel.com');
+    driver
+      .prepare(
+        `UPDATE business_emails SET off_site = 1
+          WHERE email_id = (SELECT id FROM emails WHERE address = 'support@overfuel.com')`,
+      )
+      .run();
+    expect(send(driver).rows[0]).toMatchObject({
+      email: 'sales@akunitedauto.com',
+      other_emails: null,
+    });
+    expect(emailsIn(exportAll(driver, START).rows)).toEqual(['sales@akunitedauto.com']);
+  });
+
+  it('ranks privacy@-type addresses last, even below free mail', () => {
+    const driver = db();
+    const id = addBusiness(driver, 'Classic Collision');
+    setDomain(driver, id, 'classiccollision.com');
+    addEmail(driver, id, 'privacy@classiccollision.com', { role: true });
+    addEmail(driver, id, 'owner.cc@gmail.com', { free: true });
+    expect(send(driver).rows[0]).toMatchObject({
+      email: 'owner.cc@gmail.com',
+      other_emails: 'privacy@classiccollision.com',
+    });
+  });
+
   it('never offers a junk address, as best or as another', () => {
     const driver = db();
     const id = addBusiness(driver, 'Acme');

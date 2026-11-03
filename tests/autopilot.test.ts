@@ -30,6 +30,7 @@ function input(snapshot: Partial<Snapshot>, extra: Partial<DecideInput> = {}): D
       lastSentAt: null,
       sheetEntity: 'leads-by-business',
       rescrape: null,
+      rebuildPending: false,
       ...snapshot,
     },
     running: new Set<TaskName>(),
@@ -128,6 +129,23 @@ describe('autopilot decisions', () => {
   it('resumes sending once the re-scrape is done', () => {
     const d = decide(input({ rowsUnsent: 5_000, rescrape: null }));
     expect(started(d)).toContain('sheets');
+  });
+
+  it('rebuilds the tab straight away when a correction asks for it', () => {
+    const busy = new Set<TaskName>(['run', 'enrich']);
+    const d = decide(
+      input({ searchesQueued: 9, rowsUnsent: 3, rebuildPending: true }, { running: busy }),
+    );
+    expect(d.start).toEqual([
+      { stage: 'sheets', input: { entity: 'leads-by-business', rebuild: true } },
+    ]);
+  });
+
+  it('waits for a re-scrape before rebuilding, so the rebuild sends corrected data', () => {
+    const d = decide(
+      input({ rowsUnsent: 3, rebuildPending: true, rescrape: { total: 10, remaining: 4 } }),
+    );
+    expect(started(d)).not.toContain('sheets');
   });
 
   it('says the sheet is not set up rather than failing every tick', () => {
@@ -231,6 +249,7 @@ describe('the autopilot controller', () => {
         lastSentAt: null,
         sheetEntity: 'leads-by-business',
         rescrape: null,
+        rebuildPending: false,
         ...snapshot,
       }),
       tasks: {

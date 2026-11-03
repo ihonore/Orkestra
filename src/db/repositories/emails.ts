@@ -27,6 +27,8 @@ export interface BusinessEmailLink {
   readonly method: string;
   readonly confidence: number;
   readonly pageDepth: number | null;
+  /** The address is someone else's — the site's builder or a vendor. See migration 0009. */
+  readonly offSite?: boolean;
 }
 
 export interface DomainRecord {
@@ -113,10 +115,11 @@ export class EmailsRepository extends BaseRepository {
 
     this.#linkEmail = driver.prepare(
       `INSERT INTO business_emails (business_id, email_id, source_url, source_domain_id,
-                                    method, confidence, page_depth, first_seen_at)
+                                    method, confidence, page_depth, off_site, first_seen_at)
        VALUES (:businessId, :emailId, :sourceUrl, :sourceDomainId, :method,
-               :confidence, :pageDepth, :now)
+               :confidence, :pageDepth, :offSite, :now)
        ON CONFLICT (business_id, email_id) DO UPDATE SET
+         off_site = :offSite,
          -- Keep the strongest evidence: a mailto: found later should beat a
          -- body-text match found earlier.
          confidence = MAX(confidence, :confidence),
@@ -194,8 +197,55 @@ export class EmailsRepository extends BaseRepository {
       method: input.method,
       confidence: input.confidence,
       pageDepth: input.pageDepth,
+      offSite: input.offSite === true ? 1 : 0,
       now,
     });
+  }
+
+  /** Every link with what judging its ownership needs. */
+  linksForReview(): {
+    rowid: number;
+    local_part: string;
+    email_domain: string;
+    is_role: number;
+    is_free: number;
+    off_site: number;
+    site: string | null;
+    name: string;
+  }[] {
+    return this.driver
+      .prepare<{
+        rowid: number;
+        local_part: string;
+        email_domain: string;
+        is_role: number;
+        is_free: number;
+        off_site: number;
+        site: string | null;
+        name: string;
+      }>(
+        `SELECT be.rowid AS rowid, e.local_part, e.email_domain, e.is_role, e.is_free,
+                be.off_site, d.domain AS site, b.name
+           FROM business_emails be
+           JOIN emails e ON e.id = be.email_id
+           JOIN businesses b ON b.id = be.business_id
+           LEFT JOIN domains d ON d.id = b.domain_id`,
+      )
+      .all();
+  }
+
+  /** Record new ownership verdicts. Returns how many links changed. */
+  setOffSite(verdicts: readonly { rowid: number; offSite: boolean }[]): number {
+    if (verdicts.length === 0) return 0;
+    const statement = this.driver.prepare(
+      `UPDATE business_emails SET off_site = ? WHERE rowid = ? AND off_site <> ?`,
+    );
+    return this.inTransaction(() =>
+      verdicts.reduce((n, v) => {
+        const flag = v.offSite ? 1 : 0;
+        return n + statement.run([flag, v.rowid, flag]).changes;
+      }, 0),
+    );
   }
 
   claimDomain(now: Timestamp = Date.now()): DomainRecord | null {
@@ -278,9 +328,9 @@ export class EmailsRepository extends BaseRepository {
   }
 
   /** Businesses whose website is on this domain, so found addresses can be linked. */
-  businessesForDomain(domainId: number): { id: number }[] {
+  businessesForDomain(domainId: number): { id: number; name: string }[] {
     return this.driver
-      .prepare<{ id: number }>(`SELECT id FROM businesses WHERE domain_id = ?`)
+      .prepare<{ id: number; name: string }>(`SELECT id, name FROM businesses WHERE domain_id = ?`)
       .all([domainId]);
   }
 

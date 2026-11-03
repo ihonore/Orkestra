@@ -129,6 +129,8 @@ export interface Snapshot {
   readonly lastSentAt: number | null;
   /** A re-scrape in progress, which holds the sheet back until it finishes. */
   readonly rescrape: { readonly total: number; readonly remaining: number } | null;
+  /** The sheet's tab is to be cleared and sent again, after a correction. */
+  readonly rebuildPending: boolean;
 }
 
 /** One of the three stages, which map one-to-one onto task names. */
@@ -254,6 +256,10 @@ export function decide(input: DecideInput): Decision {
           `holding until the re-scrape finishes: ${(total - remaining).toLocaleString()} of ` +
           `${total.toLocaleString()} searches re-read`,
       };
+    } else if (snapshot.rebuildPending) {
+      // Rows already in the tab predate a correction; send it all again now.
+      start.push({ stage: 'sheets', input: { entity: snapshot.sheetEntity, rebuild: true } });
+      sheets = { state: 'running', detail: 'rebuilding the tab with the corrected data' };
     } else if (unsent === 0) {
       sheets = { state: 'idle', detail: 'the sheet is up to date' };
     } else {

@@ -151,6 +151,7 @@ const PLACEHOLDER_DOMAINS = new Set([
   'website.com',
   'company.com',
   'email.com',
+  'address.com',
   'test.com',
   'sentry.local',
   'localhost',
@@ -165,6 +166,34 @@ const PLACEHOLDER_DOMAINS = new Set([
  */
 const PLACEHOLDER_DOMAIN_RE =
   /^(?:your|you|my)-?(?:web)?(?:site|domain|company|business|email|mail|url|server)?(?:-?name)?\.[a-z.]+$/;
+
+/**
+ * Local parts that are a template's filler, not a mailbox: example@mail.com,
+ * firstname.lastname@tkelevator.com, mymail@mailservice.com, all found in the
+ * data. `email@` is deliberately absent — real businesses use it
+ * (email@rockyheights.com).
+ */
+const PLACEHOLDER_LOCAL_PARTS = new Set([
+  'example',
+  'sample',
+  'yourname',
+  'your.name',
+  'youremail',
+  'your.email',
+  'yourmail',
+  'myemail',
+  'mymail',
+  'firstname',
+  'firstname.lastname',
+  'first.last',
+  'firstlast',
+  'john.doe',
+  'johndoe',
+  'jane.doe',
+  'janedoe',
+  'name.surname',
+  'someone',
+]);
 
 /** File extensions that mean the "domain" is really a filename. */
 const ASSET_EXTENSIONS =
@@ -293,7 +322,11 @@ export function validateEmail(raw: string, options: ValidationOptions = {}): Ema
   if (VENDOR_DOMAINS.some((pattern) => pattern.test(domain))) return junk('vendor_telemetry');
 
   // 5. Template placeholders.
-  if (PLACEHOLDER_DOMAINS.has(domain) || PLACEHOLDER_DOMAIN_RE.test(domain)) {
+  if (
+    PLACEHOLDER_DOMAINS.has(domain) ||
+    PLACEHOLDER_DOMAIN_RE.test(domain) ||
+    PLACEHOLDER_LOCAL_PARTS.has(localPart)
+  ) {
     return junk('placeholder');
   }
 
@@ -341,4 +374,105 @@ export function confidenceFor(verdict: EmailVerdict, siteDomain: string | null):
   if (siteDomain !== null && verdict.domain.endsWith(`.${siteDomain}`)) return 0.9;
   if (verdict.isFree) return 0.7;
   return 0.4;
+}
+
+/**
+ * Generic mailboxes that are not a role at a business so much as plumbing:
+ * these, like role addresses, are what a site's builder or platform leaves in
+ * a footer or privacy page.
+ */
+const SYSTEM_LOCAL_RE =
+  /(legal|privacy|compliance|support|bug|dmca|copyright|noreply|no-reply|donotreply|postmaster|webmaster|abuse|recruit|careers)/;
+
+/** Lowercase letters and digits only, for comparing names and domains. */
+const squash = (text: string): string => text.toLowerCase().replace(/[^a-z0-9]/g, '');
+
+/** The registrable domain without its suffix, squashed: "red-mountain.co.uk" → "redmountain". */
+function domainLabel(domain: string): string {
+  return squash(parse(domain).domainWithoutSuffix ?? domain.split('.')[0] ?? '');
+}
+
+/** Length of the longest run of characters the two strings share. */
+function longestCommonRun(a: string, b: string): number {
+  let best = 0;
+  const previous = new Array<number>(b.length + 1).fill(0);
+  for (let i = 1; i <= a.length; i += 1) {
+    let diagonal = 0;
+    for (let j = 1; j <= b.length; j += 1) {
+      const above = previous[j]!;
+      previous[j] = a[i - 1] === b[j - 1] ? diagonal + 1 : 0;
+      if (previous[j]! > best) best = previous[j]!;
+      diagonal = above;
+    }
+  }
+  return best;
+}
+
+/** "Mortgage Brokers of Alaska" → "mboa": how acronym domains are formed. */
+function initials(name: string): string {
+  return name
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter((word) => word !== '')
+    .map((word) => word[0])
+    .join('');
+}
+
+/**
+ * Whether an address found on a business's website belongs to someone else —
+ * the site's builder, platform or a vendor — rather than to the business.
+ *
+ * Measured on the real data, the culprits are generic mailboxes on a domain
+ * unrelated to the business: support@overfuel.com on a dealer's site,
+ * contact@bizsite.link on a site built with it, bugreport@moatable.com on 25
+ * unrelated sites. So an address belongs elsewhere when all of these hold:
+ *
+ *  - it is not on the business's own website domain, and not free mail;
+ *  - it is a generic or system mailbox, not a person — jeffswickard@swickard.com
+ *    on Swickard's own dealership sites is a real person and stays;
+ *  - its domain has nothing meaningful in common with the business's website
+ *    or name. "Meaningful" is a shared run of 5+ characters
+ *    (rmgaragedoors / redmountaingaragedoors), one containing the other, the
+ *    same first three letters (sosalaska / sosrestorationak), or the name's
+ *    initials (akmboa / Mortgage Brokers of Alaska). Plain substring matching
+ *    was too blunt: it dropped exactly those, which are the businesses' own
+ *    second domains.
+ *
+ * Judged per business, never per address: support@overfuel.com is a fine
+ * lead for Overfuel itself.
+ */
+export function belongsElsewhere(
+  email: {
+    readonly localPart: string;
+    readonly domain: string;
+    readonly isRole: boolean;
+    readonly isFree: boolean;
+  },
+  site: string | null,
+  businessName: string,
+): boolean {
+  if (email.isFree) return false;
+  if (site !== null && email.domain === site) return false;
+  if (!email.isRole && !SYSTEM_LOCAL_RE.test(email.localPart)) return false;
+
+  const label = domainLabel(email.domain);
+  if (label.length < 3) return false; // too short to judge; keep it
+  const siteLabel = site === null ? '' : domainLabel(site);
+  const name = squash(businessName);
+
+  for (const other of [siteLabel, name]) {
+    if (other === '') continue;
+    if (other.includes(label) || label.includes(other)) return false;
+    if (longestCommonRun(label, other) >= 5) return false;
+    // The same opening: sosalaska / sosrestorationak.
+    if (other.length >= 3 && label.slice(0, 3) === other.slice(0, 3)) return false;
+  }
+  // An acronym of the name's first words: akmboa / "Mortgage Brokers of Alaska,
+  // LLC", ntreak / "Northern Trust Real Estate". Trailing words (LLC, Inc)
+  // rarely make it into a domain, so every leading run of 3+ initials counts.
+  const acronym = initials(businessName);
+  for (let length = acronym.length; length >= 3; length -= 1) {
+    if (label.includes(acronym.slice(0, length))) return false;
+  }
+  return true;
 }

@@ -521,10 +521,12 @@ export function buildProgram(): Command {
     .option('-s, --spreadsheet-id <id>', 'from the sheet URL (overrides config)')
     .option('-t, --tab <name>', 'sheet tab name')
     .option('--full', 're-send everything, ignoring the cursor', false)
+    .option('--rebuild', 'clear the tab below its header, then send everything again', false)
     .option('--json', 'emit machine-readable output', false)
     .action(
       async (options: {
         entity?: string;
+        rebuild: boolean;
         spreadsheetId?: string;
         tab?: string;
         full: boolean;
@@ -536,6 +538,7 @@ export function buildProgram(): Command {
           ...(options.spreadsheetId !== undefined && { spreadsheetId: options.spreadsheetId }),
           ...(options.tab !== undefined && { sheetName: options.tab }),
           full: options.full,
+          rebuild: options.rebuild,
           json: options.json,
         });
       },
