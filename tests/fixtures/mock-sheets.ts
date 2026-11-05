@@ -25,21 +25,40 @@ export interface MockSheets {
   readonly requests: CapturedRequest[];
   /** Every cell ever appended, in order, as the API received it. */
   cells(): unknown[][];
+  /** What a tab holds right now, header included: appends minus clears. */
+  rows(title: string): unknown[][];
   /** Fail the next `n` batchUpdate calls with this status. */
   failNext(count: number, status: number): void;
+  /** Fail the next `n` appends only, letting other writes through. */
+  failAppends(count: number, status: number): void;
+  /** Runs before each append is answered, e.g. to change the data mid-export. */
+  onAppend(callback: () => void): void;
   close(): Promise<void>;
 }
 
 export async function startMockSheets(
   options: {
-    existingTabs?: { title: string; sheetId: number; rows?: number; cols?: number }[];
+    existingTabs?: {
+      title: string;
+      sheetId: number;
+      rows?: number;
+      cols?: number;
+      /** Rows already in the tab, including its header. */
+      values?: unknown[][];
+    }[];
   } = {},
 ): Promise<MockSheets> {
   const requests: CapturedRequest[] = [];
   const appended: unknown[][] = [];
-  const tabs = [...(options.existingTabs ?? [])];
+  const tabs = (options.existingTabs ?? []).map((tab) => ({
+    ...tab,
+    values: [...(tab.values ?? [])],
+  }));
   let failures = 0;
   let failStatus = 429;
+  let appendFailures = 0;
+  let appendFailStatus = 403;
+  let beforeAppend: () => void = () => undefined;
   let nextSheetId = 1000;
 
   const server = http.createServer((req, res) => {
@@ -97,16 +116,61 @@ export async function startMockSheets(
           const addSheet = request['addSheet'] as { properties?: { title?: string } } | undefined;
           if (addSheet !== undefined) {
             const sheetId = (nextSheetId += 1);
-            tabs.push({ title: addSheet.properties?.title ?? 'Sheet', sheetId });
+            tabs.push({ title: addSheet.properties?.title ?? 'Sheet', sheetId, values: [] });
             replies.push({
               addSheet: { properties: { sheetId, title: addSheet.properties?.title } },
             });
             continue;
           }
 
-          const append = request['appendCells'] as { rows?: { values?: unknown[] }[] } | undefined;
+          // Real Google's answer, measured against a live sheet: a tab with a
+          // frozen header cannot lose every row beneath it. A mock that accepted
+          // this let a rebuild ship that failed on every real attempt.
+          const remove = request['deleteDimension'] as
+            { range?: { sheetId?: number; startIndex?: number; endIndex?: number } } | undefined;
+          if (remove !== undefined) {
+            const tab = tabs.find((t) => t.sheetId === remove.range?.sheetId);
+            const rowCount = tab?.rows ?? 1000;
+            if ((remove.range?.startIndex ?? 0) <= 1 && (remove.range?.endIndex ?? 0) >= rowCount) {
+              send(400, {
+                error: {
+                  code: 400,
+                  message:
+                    'Invalid requests[0].deleteDimension: Sorry, it is not possible to delete all non-frozen rows.',
+                  status: 'INVALID_ARGUMENT',
+                },
+              });
+              return;
+            }
+            replies.push({});
+            continue;
+          }
+
+          const clear = request['updateCells'] as
+            { range?: { sheetId?: number; startRowIndex?: number } } | undefined;
+          if (clear !== undefined) {
+            const tab = tabs.find((t) => t.sheetId === clear.range?.sheetId);
+            tab?.values.splice(clear.range?.startRowIndex ?? 0);
+            replies.push({});
+            continue;
+          }
+
+          const append = request['appendCells'] as
+            { sheetId?: number; rows?: { values?: unknown[] }[] } | undefined;
           if (append !== undefined) {
-            for (const row of append.rows ?? []) appended.push(row.values ?? []);
+            if (appendFailures > 0) {
+              appendFailures -= 1;
+              send(appendFailStatus, {
+                error: { code: appendFailStatus, message: 'The caller does not have permission' },
+              });
+              return;
+            }
+            beforeAppend();
+            const tab = tabs.find((t) => t.sheetId === append.sheetId);
+            for (const row of append.rows ?? []) {
+              appended.push(row.values ?? []);
+              tab?.values.push(row.values ?? []);
+            }
             replies.push({});
             continue;
           }
@@ -128,9 +192,17 @@ export async function startMockSheets(
     url: `http://127.0.0.1:${port}/`,
     requests,
     cells: () => appended,
+    rows: (title) => tabs.find((t) => t.title === title)?.values ?? [],
     failNext: (count, status) => {
       failures = count;
       failStatus = status;
+    },
+    failAppends: (count, status) => {
+      appendFailures = count;
+      appendFailStatus = status;
+    },
+    onAppend: (callback) => {
+      beforeAppend = callback;
     },
     close: () =>
       new Promise<void>((resolve) => {

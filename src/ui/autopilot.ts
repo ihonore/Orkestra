@@ -28,7 +28,7 @@
 import { execFileSync } from 'node:child_process';
 import os from 'node:os';
 import type { Logger } from '../core/logging/logger.js';
-import type { Task, TaskManager, TaskName } from './tasks.js';
+import { failureReason, type Task, type TaskManager, type TaskName } from './tasks.js';
 
 export interface AutopilotSettings {
   readonly enabled: boolean;
@@ -145,6 +145,8 @@ export const STAGE_TASK: Record<Stage, TaskName> = {
 export interface StageHistory {
   readonly failures: number;
   readonly notBefore: number;
+  /** Why the last run failed, in its own words. */
+  readonly lastError?: string | null;
 }
 
 export interface StageStatus {
@@ -186,9 +188,16 @@ export function decide(input: DecideInput): Decision {
     if (running.has(STAGE_TASK[stage])) return { state: 'running', detail: 'running' };
     const wait = history[stage].notBefore - now;
     if (wait > 0) {
-      return history[stage].failures > 0
-        ? { state: 'blocked', detail: `last run failed; retrying in ${minutes(wait)}` }
-        : { state: 'waiting', detail: `starting again in ${minutes(wait)}` };
+      if (history[stage].failures === 0) {
+        return { state: 'waiting', detail: `starting again in ${minutes(wait)}` };
+      }
+      // Say why. "Last run failed" alone let a sheet stay stale for a day with
+      // nothing on the page to act on.
+      const reason = history[stage].lastError;
+      return {
+        state: 'blocked',
+        detail: `last run failed${reason ? `: ${reason} —` : ';'} retrying in ${minutes(wait)}`,
+      };
     }
     return null;
   };
@@ -299,6 +308,7 @@ export function afterRun(
   succeeded: boolean,
   finishedAt: number,
   stage: Stage,
+  reason: string | null = null,
 ): StageHistory {
   if (succeeded) {
     const cooldown = stage === 'scrape' ? 2 * 60_000 : stage === 'emails' ? 60_000 : 0;
@@ -306,7 +316,7 @@ export function afterRun(
   }
   const failures = previous.failures + 1;
   const backoff = Math.min(60 * 60_000, 2 * 60_000 * 2 ** (failures - 1));
-  return { failures, notBefore: finishedAt + backoff };
+  return { failures, notBefore: finishedAt + backoff, lastError: reason };
 }
 
 export const FRESH_HISTORY: Readonly<Record<Stage, StageHistory>> = {
@@ -437,6 +447,7 @@ export class Autopilot {
         task.state === 'succeeded',
         task.finishedAt ?? now,
         stage,
+        failureReason(task.lines),
       );
       this.#watching.delete(stage);
     }

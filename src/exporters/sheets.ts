@@ -317,33 +317,40 @@ export class SheetsExporter {
     return { cellsUsed, cellsFree: Math.max(0, MAX_CELLS_PER_SPREADSHEET - cellsUsed) };
   }
 
+  /** Rows below the header as of {@link prepare}; each can be filled without new cells. */
+  get rowsBelowHeader(): number {
+    return Math.max(0, this.#rowCount - 1);
+  }
+
   /**
-   * Delete every row below the header, so the tab can be sent again from
-   * scratch. Deleting rather than blanking them returns the cells to the
-   * spreadsheet's 10-million-cell budget. Only for a tab this tool writes: the
-   * caller decides that, and the header row stays so the columns keep their
-   * names, freeze and any filters.
+   * Blank every row below the header, so the tab can be sent again from scratch.
+   *
+   * Values only. Deleting the rows is not an option: Google refuses it with
+   * "Sorry, it is not possible to delete all non-frozen rows", and this tool
+   * freezes the header. Blanking also keeps the rows' colours and the grid, and
+   * an append lands straight under the header — both checked against the live
+   * API. Only for a tab this tool writes: the caller decides that.
    */
-  async clearBelowHeader(schema: RecordSchema): Promise<number> {
+  async clearBelowHeader(schema: RecordSchema, retry: RetryOptions = {}): Promise<number> {
     if (this.#sheetId === null) await this.prepare(schema);
     const sheetId = this.#sheetId;
     if (sheetId === null) throw new Error('sheet tab was not prepared');
-    const removed = Math.max(0, this.#rowCount - 1);
-    if (removed === 0) return 0;
-    await this.#api.spreadsheets.batchUpdate({
-      spreadsheetId: this.#spreadsheetId,
-      requestBody: {
-        requests: [
-          {
-            deleteDimension: {
-              range: { sheetId, dimension: 'ROWS', startIndex: 1, endIndex: this.#rowCount },
-            },
+    const rows = this.rowsBelowHeader;
+    if (rows === 0) return 0;
+    await withRetry(
+      () =>
+        this.#api.spreadsheets.batchUpdate({
+          spreadsheetId: this.#spreadsheetId,
+          requestBody: {
+            requests: [
+              // With no `rows` given, updateCells clears `fields` across `range`.
+              { updateCells: { range: { sheetId, startRowIndex: 1 }, fields: 'userEnteredValue' } },
+            ],
           },
-        ],
-      },
-    });
-    this.#rowCount = 1;
-    return removed;
+        }),
+      retry,
+    );
+    return rows;
   }
 
   async #createTab(schema: RecordSchema): Promise<number> {

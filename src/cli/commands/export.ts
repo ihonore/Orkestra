@@ -11,16 +11,22 @@ import type { ResolvedConfig } from '../../config/schema.js';
 import { AppError } from '../../core/errors/taxonomy.js';
 import { displayPath, resolvePath } from '../../core/util/paths.js';
 import { openDatabaseFromConfig } from '../../db/client.js';
-import { ExportsRepository } from '../../db/repositories/exports.js';
+import type { SqliteDriver } from '../../db/driver/types.js';
+import { CURSOR_ZERO, ExportsRepository } from '../../db/repositories/exports.js';
 import { CsvWriter, groupKeyFor } from '../../exporters/csv.js';
-import { SheetsExporter, estimateMinutes } from '../../exporters/sheets.js';
-import { clearSheetRebuild } from '../../seeds/rescrape.js';
+import {
+  SheetsExporter,
+  estimateMinutes,
+  type SheetsExportOptions,
+} from '../../exporters/sheets.js';
+import { clearSheetRebuild, pendingSheetRebuild } from '../../seeds/rescrape.js';
 import {
   VIEWS,
   countRemaining,
   readPage,
   type ExportCursor,
   type ExportRow,
+  type RecordSchema,
   SHEET_LAYOUT_ENTITY,
   sharedLeadEntity,
   startingCursor,
@@ -118,19 +124,7 @@ export function runExportCsv(options: ExportCsvOptions): void {
       if (page.done) break;
     }
 
-    // A view with two streams pages until both are drained, so "fewer rows than
-    // asked for" no longer means "finished". Checking written against the count
-    // taken up front turns any future paging mistake into a loud failure rather
-    // than a quietly short export.
-    if (written !== pending) {
-      throw new AppError(
-        `Exported ${written.toLocaleString()} row(s) but ${pending.toLocaleString()} were pending.`,
-        {
-          code: 'EXPORT_INCOMPLETE',
-          hint: 'The rows are safe in the database — the cursor is what is wrong. Please report this.',
-        },
-      );
-    }
+    assertNothingSkipped(driver, schema, start, written, pending);
 
     const files = [...writers.keys()].map((file) => ({
       file,
@@ -195,6 +189,40 @@ export interface ExportSheetsOptions {
    */
   readonly rebuild?: boolean;
   readonly json?: boolean;
+  /** Points the real client at a local mock. Tests only. */
+  readonly client?: Pick<SheetsExportOptions, 'rootUrl' | 'authOverride'>;
+}
+
+/**
+ * Fail loudly if paging handed over fewer rows than the view holds.
+ *
+ * A view with two streams pages until both are drained, so "fewer rows than
+ * asked for" no longer means "finished", and a paging mistake would otherwise
+ * be a quietly short export. But the count taken up front is only a starting
+ * point: the email crawl runs alongside every export. An address found mid-run
+ * makes it more than expected, which is fine and already sent. One re-judged
+ * away mid-run makes it fewer, which is the rules working — so a shortfall only
+ * counts if the view, asked again, still has more than was handed over.
+ */
+function assertNothingSkipped(
+  driver: SqliteDriver,
+  schema: RecordSchema,
+  start: ExportCursor,
+  written: number,
+  expected: number,
+): void {
+  if (written >= expected) return;
+  const holds = countRemaining(driver, schema, start);
+  if (holds <= written) return;
+  throw new AppError(
+    `Exported ${written.toLocaleString()} row(s) but ${holds.toLocaleString()} were pending.`,
+    {
+      code: 'EXPORT_INCOMPLETE',
+      hint:
+        'The rows are safe in the database and the destination has what was sent.\n' +
+        'The cursor is what is wrong. Please report this.',
+    },
+  );
 }
 
 /**
@@ -233,19 +261,20 @@ export async function runExportSheets(options: ExportSheetsOptions): Promise<voi
   const cursors = new ExportsRepository(driver);
 
   try {
-    const fromScratch = options.full === true || options.rebuild === true;
-    if (fromScratch) cursors.reset('sheets', spreadsheetId, entity);
+    // A pending rebuild goes first whichever route got here. An ordinary send
+    // would append every row beneath the stale ones it is meant to replace.
+    const rebuild = options.rebuild === true || pendingSheetRebuild(driver) === entity;
+    const fromScratch = options.full === true || rebuild;
     const toCursor = (row: { last_id: number; last_sub_id: number } | null) =>
       row === null ? null : { lastId: row.last_id, lastSubId: row.last_sub_id };
     const partner = sharedLeadEntity(entity);
-    const start = startingCursor(
-      entity,
-      toCursor(cursors.position('sheets', spreadsheetId, entity)),
-      // --full and --rebuild mean "send everything again", so no skipping ahead.
-      partner === null || fromScratch
-        ? null
-        : toCursor(cursors.position('sheets', spreadsheetId, partner)),
-    );
+    const start = fromScratch
+      ? CURSOR_ZERO
+      : startingCursor(
+          entity,
+          toCursor(cursors.position('sheets', spreadsheetId, entity)),
+          partner === null ? null : toCursor(cursors.position('sheets', spreadsheetId, partner)),
+        );
 
     const exporter = new SheetsExporter({
       spreadsheetId,
@@ -254,24 +283,41 @@ export async function runExportSheets(options: ExportSheetsOptions): Promise<voi
       ...(settings.credentialsFile !== undefined && {
         credentialsFile: resolvePath(settings.credentialsFile, options.config.paths.root),
       }),
+      ...options.client,
     });
 
     const room = await exporter.prepare(schema);
-    if (options.rebuild === true) {
+    const pending = countRemaining(driver, schema, start);
+
+    // Decided before anything changes: refusing after a clear would leave an
+    // empty tab. A rebuild reuses the rows it blanks, so they count as free.
+    const cellsNeeded = pending * schema.fields.length;
+    const cellsFree =
+      room.cellsFree + (rebuild ? exporter.rowsBelowHeader * schema.fields.length : 0);
+    if (cellsNeeded > cellsFree) {
+      throw new AppError(
+        `This export needs ${cellsNeeded.toLocaleString()} cells but the spreadsheet has ${cellsFree.toLocaleString()} free.`,
+        { code: 'CONFIG_INVALID', hint: 'Use a fresh spreadsheet, or export to CSV.' },
+      );
+    }
+
+    if (rebuild) {
       const cleared = await exporter.clearBelowHeader(schema);
       if (options.json !== true) {
         console.log(style.grey(`Cleared ${cleared.toLocaleString()} row(s) from "${sheetName}".`));
       }
     }
-    const pending = countRemaining(driver, schema, start);
-    // Done once the tab holds everything again; a rebuild that fails part-way
-    // stays requested, and the next attempt clears and starts over.
-    const finishRebuild = (): void => {
-      if (options.rebuild === true) clearSheetRebuild(driver, entity);
-    };
+    // Only now is the old position wrong. And the rebuild is spent the moment
+    // the tab is blank: from here a failed send simply resumes from where it
+    // stopped, so nothing can ever wipe the tab a second time.
+    if (fromScratch) {
+      driver.transaction(() => {
+        cursors.reset('sheets', spreadsheetId, entity);
+        if (rebuild) clearSheetRebuild(driver, entity);
+      }, 'immediate');
+    }
 
     if (pending === 0) {
-      finishRebuild();
       console.log(
         style.grey(
           start.lastId > 0 || start.lastSubId > 0
@@ -282,44 +328,31 @@ export async function runExportSheets(options: ExportSheetsOptions): Promise<voi
       return;
     }
 
-    // Refuse rather than fail partway through with a half-written sheet.
-    if (pending > settings.maxRows) {
-      throw new AppError(
-        `${pending.toLocaleString()} rows exceeds the ${settings.maxRows.toLocaleString()}-row limit for Sheets.`,
-        {
-          code: 'CONFIG_INVALID',
-          hint:
-            'A spreadsheet holds 10 million cells in total, and one service account may write\n' +
-            '60 times a minute. Use `gms export csv` for bulk, or raise\n' +
-            'exporters.sheets.maxRows if you are sure it fits.',
-        },
+    // At most this many per run; the rest follows next run, from the cursor.
+    // Refusing instead could never clear, because a backlog only grows.
+    const limit = settings.maxRows;
+
+    if (options.json !== true) {
+      console.log(
+        keyValue([
+          ['spreadsheet', spreadsheetId],
+          ['tab', sheetName],
+          ['rows to send', Math.min(pending, limit).toLocaleString()],
+          [
+            'estimated',
+            `${estimateMinutes(Math.min(pending, limit)).toFixed(1)} min at 60 writes/min`,
+          ],
+        ]),
       );
     }
-
-    const cellsNeeded = pending * schema.fields.length;
-    if (cellsNeeded > room.cellsFree) {
-      throw new AppError(
-        `This export needs ${cellsNeeded.toLocaleString()} cells but the spreadsheet has ${room.cellsFree.toLocaleString()} free.`,
-        { code: 'CONFIG_INVALID', hint: 'Use a fresh spreadsheet, or export to CSV.' },
-      );
-    }
-
-    console.log(
-      keyValue([
-        ['spreadsheet', spreadsheetId],
-        ['tab', sheetName],
-        ['rows to send', pending.toLocaleString()],
-        ['estimated', `${estimateMinutes(pending).toFixed(1)} min at 60 writes/min`],
-      ]),
-    );
 
     let cursor = start;
     let written = 0;
     let requests = 0;
     let retries = 0;
 
-    for (;;) {
-      const page = readPage(driver, schema, cursor, PAGE_SIZE);
+    while (written < limit) {
+      const page = readPage(driver, schema, cursor, Math.min(PAGE_SIZE, limit - written));
       const rows = page.rows;
       if (rows.length === 0) break;
 
@@ -335,18 +368,12 @@ export async function runExportSheets(options: ExportSheetsOptions): Promise<voi
       if (page.done) break;
     }
 
-    if (written !== pending) {
-      throw new AppError(
-        `Sent ${written.toLocaleString()} row(s) but ${pending.toLocaleString()} were pending.`,
-        {
-          code: 'EXPORT_INCOMPLETE',
-          hint:
-            'The rows are safe in the database and the sheet has what was sent.\n' +
-            'Re-running is safe; if the count is still short, please report this.',
-        },
-      );
+    assertNothingSkipped(driver, schema, start, written, Math.min(pending, limit));
+
+    const remaining = countRemaining(driver, schema, cursor);
+    if (remaining > 0 && written >= limit && options.json !== true) {
+      console.log(style.grey(`${remaining.toLocaleString()} more row(s) go in the next run.`));
     }
-    finishRebuild();
 
     if (options.json === true) {
       console.log(JSON.stringify({ entity, written, requests, retries, cursor }, null, 2));

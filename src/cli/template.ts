@@ -201,9 +201,10 @@ exporters:
 
     createIfMissing: true
 
-    # Refuse an export larger than this. A spreadsheet holds 10 million cells in
-    # total and one service account may write 60 times a minute, so Sheets is a
-    # shared view — use CSV for bulk. See docs/GOOGLE_SHEETS.md
+    # The most rows one run sends; a bigger backlog carries on next run. A
+    # spreadsheet holds 10 million cells in total and one service account may
+    # write 60 times a minute, so Sheets is a shared view — use CSV for bulk.
+    # See docs/GOOGLE_SHEETS.md
     maxRows: 50000
 
 humanize:

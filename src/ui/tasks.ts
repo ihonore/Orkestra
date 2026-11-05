@@ -55,6 +55,27 @@ const MAX_LINES = 500;
 const MAX_FINISHED = 40;
 
 /**
+ * The one line that says why a task failed, read from its output.
+ *
+ * The CLI reports a failure as `✗ message` (`XX message` on consoles without
+ * Unicode), followed by a hint. The last such line is the reason; a message
+ * ending in a colon has its detail on the next line. Without one, the output's
+ * last line is the best evidence there is.
+ */
+export function failureReason(lines: readonly string[]): string | null {
+  // eslint-disable-next-line no-control-regex -- matching colour codes is the point
+  const plain = lines.map((line) => line.replace(/\u001b\[[0-9;]*m/g, '').trim());
+  for (let i = plain.length - 1; i >= 0; i -= 1) {
+    const reported = /^(?:✗|XX) (.+)$/.exec(plain[i]!)?.[1];
+    if (reported === undefined) continue;
+    const next = plain[i + 1];
+    const text = reported.endsWith(':') && next !== undefined ? `${reported} ${next}` : reported;
+    return text.slice(0, 300);
+  }
+  return plain.at(-1)?.slice(0, 300) ?? null;
+}
+
+/**
  * Supervises one task at a time per name.
  *
  * Two concurrent `run` processes would contend for the same job queue — which

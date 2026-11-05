@@ -284,7 +284,7 @@ export const ExportersSchema = z
         credentialsFile: z.string().min(1).optional(),
         createIfMissing: z.boolean().default(true),
         /**
-         * Refuse an export larger than this.
+         * The most rows one run sends; a bigger backlog carries on next run.
          *
          * A spreadsheet holds 10 million cells in total, and the write quota is
          * 60 requests per minute for the whole service account. Sheets is a

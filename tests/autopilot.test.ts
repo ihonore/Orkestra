@@ -15,7 +15,7 @@ import {
   type DecideInput,
   type Snapshot,
 } from '../src/ui/autopilot.js';
-import type { Task, TaskManager, TaskName } from '../src/ui/tasks.js';
+import { failureReason, type Task, type TaskManager, type TaskName } from '../src/ui/tasks.js';
 
 const NOW = 1_800_000_000_000;
 const ON = { ...DEFAULT_AUTOPILOT, enabled: true };
@@ -234,7 +234,7 @@ describe('the autopilot controller', () => {
     let saved: unknown = null;
     const tasks = new Map<
       string,
-      { id: string; name: TaskName; state: string; finishedAt: number | null }
+      { id: string; name: TaskName; state: string; finishedAt: number | null; lines: string[] }
     >();
     const startedNames: TaskName[] = [];
     const pilot = new Autopilot({
@@ -257,7 +257,7 @@ describe('the autopilot controller', () => {
         list: () => [...tasks.values()],
       } as unknown as TaskManager,
       start: (name) => {
-        const task = { id: `t${tasks.size}`, name, state: 'running', finishedAt: null };
+        const task = { id: `t${tasks.size}`, name, state: 'running', finishedAt: null, lines: [] };
         tasks.set(task.id, task);
         startedNames.push(name);
         return { ok: true, task: task as unknown as Task };
@@ -318,5 +318,48 @@ describe('the autopilot controller', () => {
     first.state = 'stopped';
     r.pilot.tick();
     expect(r.startedNames).toEqual(['run']);
+  });
+});
+
+describe('saying why a step failed', () => {
+  it('shows the reason in the panel, not just that it failed', () => {
+    const history = {
+      ...FRESH_HISTORY,
+      sheets: afterRun(
+        FRESH_HISTORY.sheets,
+        false,
+        NOW,
+        'sheets',
+        'The caller does not have permission',
+      ),
+    };
+    expect(decide(input({ rowsUnsent: 900 }, { history })).status.sheets).toEqual({
+      state: 'blocked',
+      detail: 'last run failed: The caller does not have permission — retrying in 2 min',
+    });
+  });
+
+  it('forgets the reason once a run succeeds', () => {
+    const failed = afterRun(FRESH_HISTORY.sheets, false, NOW, 'sheets', 'boom');
+    expect(afterRun(failed, true, NOW, 'sheets').lastError).toBeUndefined();
+  });
+
+  it.each([
+    [
+      'the CLI failure line, not the hint after it',
+      ['starting', '✗ Quota exceeded', 'Set GMS_DEBUG=1 for a stack trace.'],
+      'Quota exceeded',
+    ],
+    ['the plain-console spelling', ['XX Sheet not found'], 'Sheet not found'],
+    [
+      'the detail when the message ends in a colon',
+      ['XX Invalid configuration:', '(root): Unrecognized key: "self"'],
+      'Invalid configuration: (root): Unrecognized key: "self"',
+    ],
+    ['the last line when nothing was reported', ['one', 'two'], 'two'],
+    ['nothing when there was no output', [], null],
+    ['without terminal colour codes', ['\u001b[31mXX boom\u001b[0m'], 'boom'],
+  ] as const)('reads %s', (_label, lines, expected) => {
+    expect(failureReason(lines)).toBe(expected);
   });
 });

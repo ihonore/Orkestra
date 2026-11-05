@@ -313,7 +313,7 @@ export const PAGE = String.raw`<!doctype html>
   .editor .p { color: var(--faint); font-size: 11px; margin-top: 10px; }
   .step details { margin-top: 13px; }
   .aprow { display: flex; gap: 11px; align-items: center; font-size: 12px; margin-bottom: 6px; }
-  .aprow .nm { min-width: 150px; }
+  .aprow .nm { min-width: 150px; flex: none; }
   .step.autopilot .idx { font-size: 17px; }
   .runrow { display: flex; align-items: center; gap: 13px; padding: 7px 0; cursor: pointer; }
   .runrow + .runrow { border-top: 1px solid var(--rule-soft); }
@@ -683,7 +683,7 @@ async function loadControl() {
     },
     {
       n: 5, title: 'Find email addresses',
-      why: 'Crawls each business website. Government and education addresses are excluded.',
+      why: 'Crawls each business website. Government, education, and privacy or legal mailboxes are excluded.',
       blocked: !hasDomains, satisfied: o.emails.usable > 0,
       status: o.emails.usable > 0 ? num(o.emails.usable) + ' addresses' : null,
       body:
@@ -763,7 +763,7 @@ function renderAutopilot(withForm) {
     STAGES.map(([key, label]) => {
       const s = auto.status[key];
       return '<div class="aprow"><span class="dot ' + stateDot[s.state] + '"></span>' +
-        '<span class="nm">' + esc(label) + '</span><span class="muted">' + esc(s.detail) + '</span></div>';
+        '<span class="nm">' + esc(label) + '</span><span class="' + (s.state === 'blocked' ? 'bad' : 'muted') + '">' + esc(s.detail) + '</span></div>';
     }).join('') +
     '<div class="aprow"><span class="dot"></span><span class="nm">Memory</span><span class="muted">' +
     num(auto.memory.freeMb) + ' MB free of ' + num(auto.memory.totalMb) + ' MB · new steps wait below ' +
@@ -961,11 +961,15 @@ function renderRun() {
     return '<div class="runrow' + (task === shown ? ' shown' : '') + '" data-task="' + esc(task.id) + '">' +
       '<span class="dot ' + dot + '"></span>' +
       '<span>' + esc(task.label) + '</span>' +
-      '<span class="label">' + esc(live ? 'running · since ' + new Date(task.startedAt).toLocaleTimeString() : task.state) + '</span>' +
+      '<span class="label">' + esc(live
+        ? 'running · since ' + new Date(task.startedAt).toLocaleTimeString()
+        : task.state + (task.finishedAt ? ' · ' + new Date(task.finishedAt).toLocaleTimeString() : '')) + '</span>' +
       (live ? '<button class="go stop" data-stop="' + esc(task.id) + '" style="margin-left:auto">Stop</button>' : '') +
       '</div>';
   };
-  const rows = running.length ? running : last ? [last] : [];
+  // Finished ones too: a failure has to stay findable after its row stops
+  // running, or there is no way to read why it failed.
+  const rows = [...running, ...ctlState.tasks.filter((x) => x.state !== 'running').slice(0, 3)];
   $('#runbar').innerHTML = rows.length
     ? rows.map(row).join('')
     : '<div class="runrow"><span class="dot"></span><span class="label">nothing running</span></div>';
@@ -973,7 +977,8 @@ function renderRun() {
   const log = $('#log');
   const atBottom = log.scrollTop + log.clientHeight >= log.scrollHeight - 30;
   log.textContent = shown && shown.lines.length
-    ? shown.lines.map(readable).join('\n') : 'No output yet.';
+    // Playwright's messages carry terminal colour codes, even with NO_COLOR set.
+    ? shown.lines.map((line) => readable(line).replace(/\x1b\[[0-9;]*m/g, '')).join('\n') : 'No output yet.';
   if (atBottom) log.scrollTop = log.scrollHeight;
 }
 
