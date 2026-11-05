@@ -411,6 +411,18 @@ Visits the websites `gms run` collected and looks for contact addresses.
   250–900 ms politeness pause when it is longer — the two are not added.
 - Government (`.gov`, `.mil`) and education (`.edu`) addresses are dropped, as
   configured — those directories were the largest junk source in the legacy data.
+- Government also covers local-government `.us` domains (`*.tx.us`), tribal
+  `.nsn.us`, `cityof…`/`townof…` domains, and offices such as `mayor@` and
+  `elections@` wherever they are hosted. A bare `.us` is not enough: plenty of
+  businesses use one. A government body on an ordinary domain with ordinary
+  mailboxes can still get through; add it to
+  `enrichment.websiteEmails.validation.blockedDomains`.
+- Mailboxes nobody answers for business are rejected too: `privacy@` and its
+  variants (`dataprivacy@`, `privacyofficer@`), `legal@`, `compliance@`, `dmca@`,
+  `copyright@`, `abuse@`, `noreply@`, `unsubscribe@`, `postmaster@`, `webmaster@`.
+  The exception is a firm whose trade is the word: `legal@jdwcounsel.com` stays.
+  New rules also apply to stored addresses, on `gms db migrate` and whenever the
+  email crawl starts.
 - Everything found for one site commits in one transaction.
 - **Re-running straight after a pass reports "domains crawled: 0"** — every site
   is on the 90-day `recrawlAfterDays` cooldown. Changing the extraction rules
@@ -541,7 +553,8 @@ A local web page showing progress, leads, failures and exports — and, with
     starts a second copy of a step that is running.
   - It starts nothing new while free memory is under 1,024 MB.
   - A step that fails waits 2 minutes, then 4, 8, and so on up to an hour,
-    rather than being restarted in a loop.
+    rather than being restarted in a loop. The panel shows why, in red, and
+    **Activity** keeps recent finished tasks so their logs can be opened.
   - Pressing **Stop** on a step turns autopilot off, so it does not restart
     what you just stopped.
   - Its settings live in the database. Left on, it resumes when the
@@ -587,8 +600,8 @@ Entities:
   (info@, contact@), then other business mail, then free mail like Gmail. A
   business is sent once, with all the addresses its website crawl found. One
   that gains an address on a recrawl months later is not sent again.
-  Generic addresses nobody who buys reads (privacy@, legal@, careers@,
-  noreply@, billing@) rank below every other address.
+  Departments that reach a person but not a buyer (careers@, billing@, press@)
+  rank below every other address.
 - In every lead export, an address is left out for a business when it belongs
   to someone else: a generic or system mailbox on a domain unrelated to the
   business's website and name, such as `support@overfuel.com` on a dealer's
@@ -651,9 +664,12 @@ position, so neither re-sends what the other sent.
   whole service account, and one batch costs one write however many rows it
   carries.
 - Creates the tab with a bold, frozen header row if it doesn't exist.
-- Refuses rather than half-writes: an export above `exporters.sheets.maxRows`
-  (50,000) or larger than the spreadsheet's remaining share of its 10-million-cell
-  budget stops before sending anything.
+- Sends at most `exporters.sheets.maxRows` (50,000) rows per run; a bigger backlog
+  carries on next run from where it stopped. An export larger than the
+  spreadsheet's remaining share of its 10-million-cell budget stops before
+  sending or clearing anything.
+- A lead found, or re-judged away, by the email crawl during a send is not an
+  error: the send sends what the view holds at that moment.
 - Retries 429 and 5xx with jittered backoff; gives up immediately on 403, which
   will never fix itself by waiting.
 - Setup is in [GOOGLE_SHEETS.md](GOOGLE_SHEETS.md). The step people miss is
@@ -695,10 +711,12 @@ sending resumes by itself afterwards. The **Re-scrape finished searches**
 button on the Issues page does the same on demand.
 
 When an update changes rows the sheet already has, migrate asks for the tab to
-be **rebuilt** once: cleared below its header and sent again from scratch.
-Autopilot does this at its next chance (after any re-scrape), and
-`gms export sheets --rebuild` does it by hand. Anything typed into the tab's
-rows is lost, so keep notes in other columns or another tab.
+be **rebuilt** once: every value below its header is blanked and sent again from
+scratch, keeping the rows' colours. Autopilot does this at its next chance (after
+any re-scrape), any other send of that export does it first, and
+`gms export sheets --rebuild` does it on demand. It clears the tab only once: if
+sending fails afterwards, the next send resumes from where it stopped. Anything
+typed into the tab's rows is lost, in any column, so keep notes in another tab.
 
 Use `gms db backup`, never `cp`: copying an open SQLite database picks up the
 `-wal` and `-shm` sidecars inconsistently and yields a file that may not open.

@@ -438,15 +438,15 @@ describe('one row per business', () => {
     expect(emailsIn(exportAll(driver, START).rows)).toEqual(['sales@akunitedauto.com']);
   });
 
-  it('ranks privacy@-type addresses last, even below free mail', () => {
+  it('ranks careers@-type addresses last, even below free mail', () => {
     const driver = db();
     const id = addBusiness(driver, 'Classic Collision');
     setDomain(driver, id, 'classiccollision.com');
-    addEmail(driver, id, 'privacy@classiccollision.com', { role: true });
+    addEmail(driver, id, 'careers@classiccollision.com', { role: true });
     addEmail(driver, id, 'owner.cc@gmail.com', { free: true });
     expect(send(driver).rows[0]).toMatchObject({
       email: 'owner.cc@gmail.com',
-      other_emails: 'privacy@classiccollision.com',
+      other_emails: 'careers@classiccollision.com',
     });
   });
 

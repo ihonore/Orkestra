@@ -31,15 +31,13 @@ export interface RecordSchema {
 const sqlList = (words: readonly string[]): string => `(${words.map((w) => `'${w}'`).join(', ')})`;
 
 /**
- * Generic addresses that are a poor first choice for a business: nobody who
- * buys reads privacy@ or careers@. Still exported, ranked last.
+ * Departments that reach a person, but not one who buys: a poor first choice
+ * for a business, so they rank last. Mailboxes nobody answers (privacy@,
+ * noreply@) never get this far: the email rules reject them outright.
  */
 // prettier-ignore
 const LOW_VALUE_LOCAL_PARTS = [
-  'privacy', 'legal', 'compliance', 'abuse', 'dmca', 'copyright',
-  'postmaster', 'hostmaster', 'webmaster',
-  'noreply', 'no-reply', 'donotreply', 'do-not-reply', 'unsubscribe', 'bounce', 'bounces',
-  'bugreport', 'bugs', 'security',
+  'bugs', 'security',
   'careers', 'jobs', 'hr', 'recruiting', 'recruitment', 'hiring',
   'billing', 'accounts', 'accounting', 'invoices', 'payables', 'payroll', 'ap', 'ar',
   'press', 'media',
@@ -184,8 +182,9 @@ export const LEADS_WITH_EMAIL_VIEW: RecordSchema = {
  * "Best" is the address most likely to reach someone who can buy: a named
  * person at the business's own domain, then a role address there (info@,
  * contact@), then anything else that is not free mail, then free mail
- * (gmail.com), and within each, the extractor's confidence. Addresses nobody
- * who buys reads — privacy@, careers@, noreply@ — come after all of those.
+ * (gmail.com), and within each, the extractor's confidence. Departments that
+ * reach a person but not a buyer — careers@, billing@, press@ — come after all
+ * of those.
  *
  * ## Why it can be sent once, and complete
  *

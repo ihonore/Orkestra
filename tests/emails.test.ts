@@ -609,6 +609,7 @@ describe('template placeholders and invented endings', () => {
     'firstname.lastname@tkelevator.com',
     'mymail@mailservice.com',
     'email@address.com',
+    'abc@xyz.com',
   ])('rejects %s', (address) => {
     expect(validateEmail(address).isJunk).toBe(true);
   });
@@ -656,9 +657,101 @@ describe("addresses on a business's site that belong to someone else", () => {
     ['jeffswickard@swickard.com', 'swickardanchorage.com', 'Swickard Anchorage'],
     ['kwalton@lithia.com', 'anchoragechevrolet.com', 'Chevrolet of South Anchorage'],
     // The business's own domain, and free mail.
-    ['privacy@classiccollision.com', 'classiccollision.com', 'Classic Collision'],
+    ['sales@classiccollision.com', 'classiccollision.com', 'Classic Collision'],
     ['info@gmail.com', 'acme.com', 'Acme'],
   ])('keeps %s on %s', (address, site, name) => {
     expect(judge(address, site, name)).toBe(false);
+  });
+});
+
+describe('mailboxes nobody answers for business', () => {
+  // All of these were in the team's sheet, or in the data behind it.
+  it.each([
+    'privacy@classiccollision.com',
+    'dataprivacy@realogy.com',
+    'privacyofficer@thecheesecakefactory.com',
+    'hfc.privacy@gohfc.com',
+    'privacy.administrator@sirva.com',
+    'ccpa@acme.com',
+    'legal@nationalvision.com',
+    'legalnotices@nafinc.com',
+    'legal-notices@andersencorp.com',
+    'rglegalinquiries@realgeeks.com',
+    'wnig.legal@wnins.com',
+    'compliance@ahfc-acme.com',
+    'compliancebr@sirva.com',
+    'dmca@haynesboone.com',
+    'dmca_agent@acme.com',
+    'copyrightclaim@fmr.com',
+    'abuse@acme.com',
+    'noreply@imatrix.com',
+    'no-reply@acme.com',
+    'donotreply@acme.com',
+    'unsubscribe@acme.com',
+    'postmaster@cincpro.com',
+    'webmaster@vacationport.com',
+    'bugreport@moatable.com',
+  ])('rejects %s', (address) => {
+    expect(validateEmail(address)).toMatchObject({ isJunk: true, junkReason: 'non_contact' });
+  });
+
+  it.each([
+    // Where the word is the firm's trade, or part of a real name.
+    'legal@jdwcounsel.com',
+    'legal@smithlaw.com',
+    'yuraqlegal@gmail.com',
+    'paralegal@smithfirm.com',
+    'privacy@privacyfencepros.com',
+    'compliance@acmecompliance.com',
+    // Departments that reach a person: ranked last, not rejected.
+    'careers@acme.com',
+    'billing@acme.com',
+    'press@acme.com',
+    // Not a mailbox word at all.
+    'dporter@acme.com',
+    'bugs@bugcowboys.com',
+  ])('keeps %s', (address) => {
+    expect(validateEmail(address).isJunk).toBe(false);
+  });
+});
+
+describe('government addresses', () => {
+  it.each([
+    'clerk@cityofmobile.gov',
+    'tax@revenue.alabama.gov',
+    'office@army.mil',
+    'desk@fs.fed.us',
+    'info@state.tx.us',
+    'info@ci.austin.tx.us',
+    'info@co.harris.tx.us',
+    'info@townhall.salem.nh.us',
+    'council@navajo.nsn.us',
+    'info@cityofmobile.org',
+    'clerk@townofcary.com',
+    'info@countyofmaui.net',
+    'acdispatch@muni.org',
+    'wwmasmc@anchorageak.org',
+    'energy@ahfc.us',
+    'mayor@anywhere.org',
+    'elections@anywhere.com',
+  ])('rejects %s', (address) => {
+    expect(validateEmail(address)).toMatchObject({ isJunk: true, junkReason: 'government' });
+  });
+
+  it.each([
+    // A bare .us, and words that only look official.
+    'allen@wsllc.us',
+    'jperez@perezlaw.us',
+    'info@franklincountychamber.org',
+    'sales@citypapercompany.com',
+    'hello@cityofficefurniture.com',
+    'owner@countylineplumbing.com',
+  ])('keeps %s', (address) => {
+    expect(validateEmail(address).isJunk).toBe(false);
+  });
+
+  it('can be turned off, as the setting promises', () => {
+    expect(validateEmail('info@cityofmobile.org', { excludeGovernment: false }).isJunk).toBe(false);
+    expect(validateEmail('mayor@anywhere.org', { excludeGovernment: false }).isJunk).toBe(false);
   });
 });

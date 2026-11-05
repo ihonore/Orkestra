@@ -26,6 +26,7 @@ export type JunkReason =
   | 'inside_url'
   | 'vendor_telemetry'
   | 'placeholder'
+  | 'non_contact'
   | 'hash_local_part'
   | 'filename_local_part'
   | 'government'
@@ -152,6 +153,7 @@ const PLACEHOLDER_DOMAINS = new Set([
   'company.com',
   'email.com',
   'address.com',
+  'xyz.com',
   'test.com',
   'sentry.local',
   'localhost',
@@ -195,6 +197,49 @@ const PLACEHOLDER_LOCAL_PARTS = new Set([
   'someone',
 ]);
 
+/**
+ * Mailboxes that never reach anyone who buys: a privacy or legal department's,
+ * and the plumbing that mail and websites need (RFC 2142 and friends). Every
+ * form here came from the data: dataprivacy@, privacyofficer@, legalnotices@,
+ * rglegalinquiries@, wnig.legal@, dmca_agent@, compliancebr@.
+ *
+ * "legal" only as a whole mailbox: yuraqlegal@gmail.com is Yuraq Legal Services'
+ * real address. And see {@link isNonContact} for firms where the word is the
+ * trade. Departments that reach a person (careers@, billing@, press@) are kept,
+ * and ranked last by the by-business export instead.
+ */
+const NON_CONTACT_LOCAL_RE = new RegExp(
+  [
+    'privacy',
+    'ccpa',
+    'gdpr',
+    'dmca',
+    'copyright',
+    'unsubscribe',
+    'no[-_.]?reply',
+    'do[-_.]?not[-_.]?reply',
+    'mailer-?daemon',
+    'legal[-_.]?(?:notices?|inquir(?:y|ies))',
+    '^legal$',
+    '\\.legal$',
+    '^compliance',
+    '^(?:abuse|bounces?|bugreport|dpo|hostmaster|postmaster|webmaster)$',
+  ].join('|'),
+);
+
+/**
+ * Whether a mailbox is one of those, unless the word is what the firm does:
+ * legal@jdwcounsel.com is a law firm's front door, and compliance@ at a
+ * compliance consultancy is its sales line.
+ */
+function isNonContact(localPart: string, domain: string): boolean {
+  const word = NON_CONTACT_LOCAL_RE.exec(localPart)?.[0];
+  if (word === undefined) return false;
+  const label = domainLabel(domain);
+  if (word.includes('legal') && /law|legal|counsel|attorney|esq/.test(label)) return false;
+  return !label.includes(squash(word));
+}
+
 /** File extensions that mean the "domain" is really a filename. */
 const ASSET_EXTENSIONS =
   /\.(jpg|jpeg|png|gif|svg|webp|avif|bmp|ico|css|js|mjs|json|xml|pdf|woff2?|ttf|eot|mp4|webm|mp3|zip|gz)$/i;
@@ -218,12 +263,32 @@ const GOVERNMENT_PATTERNS: readonly RegExp[] = [
   /\.gov\.[a-z]{2}$/i,
   /\.mil$/i,
   /(^|\.)fed\.us$/i,
-  /(^|\.)state\.[a-z]{2}\.us$/i,
-  /(^|\.)ci\.[a-z-]+\.[a-z]{2}\.us$/i,
-  /(^|\.)co\.[a-z-]+\.[a-z]{2}\.us$/i,
-  /(^|\.)k12\.[a-z]{2}\.us$/i,
+  // Tribal governments.
+  /(^|\.)nsn\.us$/i,
+  // The .us locality space: state.tx.us, ci.austin.tx.us, co.harris.tx.us. A bare
+  // .us proves nothing — wsllc.us and perezlaw.us are ordinary businesses.
+  /\.[a-z]{2}\.us$/i,
+  // Municipalities on ordinary endings: cityofmobile.org, townofcary.com. Not
+  // "office": cityofficefurniture.com is a furniture shop.
+  /^(?:city|town|village|county|borough|township)of(?!fice)[a-z0-9-]+\./i,
+  // Known from the data, and not recognisable by shape. Add others through
+  // enrichment.websiteEmails.validation.blockedDomains.
+  /(^|\.)(?:muni\.org|anchorageak\.org|ahfc\.us)$/i,
   /(^|\.)usps\.com$/i,
 ];
+
+/** Offices that exist only in government, wherever the address is hosted. */
+const GOVERNMENT_LOCAL_PARTS = new Set([
+  'mayor',
+  'elections',
+  'cityclerk',
+  'townclerk',
+  'countyclerk',
+  'cityhall',
+  'townhall',
+  'sheriff',
+  'citymanager',
+]);
 
 /** Educational institutions. */
 const EDUCATION_PATTERNS: readonly RegExp[] = [
@@ -339,7 +404,10 @@ export function validateEmail(raw: string, options: ValidationOptions = {}): Ema
   }
 
   // 8. Government.
-  if (options.excludeGovernment !== false && GOVERNMENT_PATTERNS.some((p) => p.test(domain))) {
+  if (
+    options.excludeGovernment !== false &&
+    (GOVERNMENT_PATTERNS.some((p) => p.test(domain)) || GOVERNMENT_LOCAL_PARTS.has(localPart))
+  ) {
     return junk('government');
   }
 
@@ -352,6 +420,10 @@ export function validateEmail(raw: string, options: ValidationOptions = {}): Ema
   if (options.blockedDomains?.some((d) => domain === d || domain.endsWith(`.${d}`)) === true) {
     return junk('placeholder');
   }
+
+  // 11. A department or machine nobody answers for business. Last, so an address
+  // rejected for its domain keeps that more telling reason.
+  if (isNonContact(localPart, domain)) return junk('non_contact');
 
   return {
     ...base,
