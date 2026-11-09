@@ -85,6 +85,23 @@ export async function startMockSheets(
         return;
       }
 
+      // values.get, for the header check: the tab's first rows as plain text.
+      const valuesRange = /\/values\/([^?]+)/.exec(path);
+      if (req.method === 'GET' && valuesRange !== null) {
+        const range = decodeURIComponent(valuesRange[1]!);
+        const title = /^'?(.*?)'?!/.exec(range)?.[1]?.replace(/''/g, "'");
+        const tab = tabs.find((t) => t.title === title);
+        const text = (cell: unknown): string => {
+          const value = (cell as { userEnteredValue?: Record<string, string | number | boolean> })
+            ?.userEnteredValue;
+          const first = value === undefined ? undefined : Object.values(value)[0];
+          return first === undefined ? '' : String(first);
+        };
+        const rows = (tab?.values ?? []).slice(0, 2).map((row) => row.map(text));
+        send(200, { range, majorDimension: 'ROWS', ...(rows.length > 0 && { values: rows }) });
+        return;
+      }
+
       if (req.method === 'GET') {
         send(200, {
           spreadsheetId: 'mock',
