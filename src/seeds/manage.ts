@@ -63,6 +63,13 @@ const STATE_NAMES: Readonly<Record<string, string>> = {
   PA: 'Pennsylvania', PR: 'Puerto Rico', RI: 'Rhode Island', SC: 'South Carolina',
   SD: 'South Dakota', TN: 'Tennessee', TX: 'Texas', UT: 'Utah', VT: 'Vermont',
   VA: 'Virginia', WA: 'Washington', WV: 'West Virginia', WI: 'Wisconsin', WY: 'Wyoming',
+  // French départements a campaign is likely to add: Île-de-France and the
+  // big cities' départements. Any other code is accepted and named by itself.
+  '75': 'Paris', '77': 'Seine-et-Marne', '78': 'Yvelines', '91': 'Essonne',
+  '92': 'Hauts-de-Seine', '93': 'Seine-Saint-Denis', '94': 'Val-de-Marne',
+  '95': "Val-d'Oise", '69': 'Rhône', '59': 'Nord', '13': 'Bouches-du-Rhône',
+  '33': 'Gironde', '31': 'Haute-Garonne', '44': 'Loire-Atlantique',
+  '06': 'Alpes-Maritimes', '34': 'Hérault', '67': 'Bas-Rhin', '35': 'Ille-et-Vilaine',
 };
 
 function invalid(message: string, hint?: string): SeedError {
@@ -80,14 +87,16 @@ function invalid(message: string, hint?: string): SeedError {
 export function parseCityForm(form: SeedForm): CityInput {
   const rawZip = cleanText(form['zip']);
   const zip = normalizeZip(rawZip);
-  if (zip === null) throw invalid('A 5-digit zip code is required.');
+  if (zip === null) throw invalid('A 5-digit zip or postal code is required.');
 
   const city = cleanText(form['city']);
   if (city === null) throw invalid('The city name is required.');
   if (city.length > 100) throw invalid('That city name is too long.');
 
   const stateCode = normalizeStateCode(cleanText(form['stateCode']));
-  if (stateCode === null) throw invalid('The state must be a 2-letter code, such as GA.');
+  if (stateCode === null) {
+    throw invalid('The state must be a 2-letter code such as GA, or a département such as 75.');
+  }
 
   let lat = cleanNumber(form['lat']);
   let lng = cleanNumber(form['lng']);

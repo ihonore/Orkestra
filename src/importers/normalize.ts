@@ -43,10 +43,23 @@ export function stateFipsOf(countyFips: string | null): string | null {
   return countyFips === null ? null : countyFips.slice(0, 2);
 }
 
+/**
+ * The region a city belongs to: a US state's two letters, or a French
+ * département's code.
+ *
+ * Départements are `01`..`95`, `2A`/`2B` for Corsica and three digits overseas
+ * (`971`..`976`). A single digit is the département a spreadsheet stripped the
+ * zero from (`6` for the Alpes-Maritimes), and is repaired the way zips are.
+ */
 export function normalizeStateCode(input: string | null | undefined): string | null {
   if (input === null || input === undefined) return null;
   const trimmed = String(input).trim().toUpperCase();
-  return /^[A-Z]{2}$/.test(trimmed) ? trimmed : null;
+  if (/^[A-Z]{2}$/.test(trimmed)) return trimmed;
+  if (/^[1-9]$/.test(trimmed)) return `0${trimmed}`;
+  if (/^(\d{2}|2[AB]|97[1-6])$/.test(trimmed) && trimmed !== '00' && trimmed !== '20') {
+    return trimmed;
+  }
+  return null;
 }
 
 /**

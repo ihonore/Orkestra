@@ -33,7 +33,14 @@ import {
   type HealthGuardOptions,
   type MergeResult,
 } from './extract/merge.js';
-import { buildQuery, buildSearchUrl, scrollFeed, type SearchTarget } from './search.js';
+import type { Country } from './normalize.js';
+import {
+  buildQuery,
+  buildSearchUrl,
+  scrollFeed,
+  type BuildUrlOptions,
+  type SearchTarget,
+} from './search.js';
 
 /** Resume state, persisted as the job checkpoint. */
 export interface GoogleMapsCursor {
@@ -55,6 +62,10 @@ export const INITIAL_CURSOR: GoogleMapsCursor = {
 export interface RunJobOptions {
   readonly page: Page;
   readonly target: SearchTarget;
+  /** The search phrase template and region. Default: the US form. */
+  readonly search?: Pick<BuildUrlOptions, 'queryTemplate' | 'gl'>;
+  /** How phones and addresses are read. Default: US. */
+  readonly country?: Country;
   readonly signal?: AbortSignal;
   readonly logger?: Logger;
   readonly maxListings?: number;
@@ -122,7 +133,7 @@ async function assertNotBlocked(page: Page, consentAttempts: number): Promise<vo
  */
 export async function runGoogleMapsJob(options: RunJobOptions): Promise<JobOutcome> {
   const { page, target, logger } = options;
-  const query = buildQuery(target);
+  const query = buildQuery(target, options.search?.queryTemplate);
   const tracker = new FillRateTracker();
 
   // A function, not a bare property read. TypeScript narrows
@@ -137,7 +148,7 @@ export async function runGoogleMapsJob(options: RunJobOptions): Promise<JobOutco
 
   // Registered before any navigation: place payloads arrive during load, and a
   // listener attached afterwards misses them entirely.
-  const xhr = new XhrCollector();
+  const xhr = new XhrCollector(options.country);
   const onResponse = (response: { url: () => string; text: () => Promise<string> }): void => {
     if (!isPlaceEndpoint(response.url())) return;
     void response
@@ -150,7 +161,7 @@ export async function runGoogleMapsJob(options: RunJobOptions): Promise<JobOutco
   try {
     // ── Phase 1: search and harvest the feed ─────────────────────────────────
     if (cursor.phase === 'search') {
-      await page.goto(buildSearchUrl(target), { waitUntil: 'domcontentloaded' });
+      await page.goto(buildSearchUrl(target, options.search), { waitUntil: 'domcontentloaded' });
 
       const consent = await handleConsent(page, logger !== undefined ? { logger } : {});
       if (consent === 'rejected' || consent === 'accepted') consentAttempts += 1;
@@ -265,6 +276,7 @@ export async function runGoogleMapsJob(options: RunJobOptions): Promise<JobOutco
         xhr: xhr.best({ fid: url.fid, cid: url.cid }),
         dom: await extractFromDom(page),
         gmapsUrl: page.url(),
+        ...(options.country !== undefined && { country: options.country }),
       });
 
       // A listing with no name at all did not parse; count it for the health

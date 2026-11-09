@@ -41,9 +41,10 @@ export interface BlockInput {
 /**
  * Phrases Google serves on its interstitials.
  *
- * Matching text is only safe because the fetcher pins `hl=en&gl=us` on every
- * request — under another locale these strings are translated and every check
- * here silently stops matching.
+ * Every Maps URL pins `hl=en`, so these are English first. The French forms
+ * are here because Google has served a localised page to an English request
+ * before, and a block that goes unrecognised is retried as an ordinary
+ * failure instead of resting the identity.
  */
 const BLOCK_PHRASES: readonly (readonly [RegExp, BlockSignal])[] = [
   [/unusual traffic from your computer network/i, 'unusual-traffic'],
@@ -52,6 +53,9 @@ const BLOCK_PHRASES: readonly (readonly [RegExp, BlockSignal])[] = [
   [/i'?m not a robot/i, 'captcha'],
   [/recaptcha/i, 'captcha'],
   [/why did this happen\?/i, 'unusual-traffic'],
+  [/nos syst[eè]mes ont d[ée]tect[ée] un trafic exceptionnel/i, 'unusual-traffic'],
+  [/je ne suis pas un robot/i, 'captcha'],
+  [/pourquoi cette page s'affiche/i, 'unusual-traffic'],
 ];
 
 /** URL shapes that mean "refused" regardless of status code. */

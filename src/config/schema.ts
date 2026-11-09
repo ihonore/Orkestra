@@ -58,6 +58,45 @@ export const UiSchema = z
   })
   .strict();
 
+/** Countries whose phone numbers and addresses the scraper can parse. */
+export const MarketCountrySchema = z.enum(['US', 'FR']);
+export type MarketCountry = z.infer<typeof MarketCountrySchema>;
+
+/**
+ * Where a campaign's businesses are, and how to search for them.
+ *
+ * The Maps interface language (`hl=en`) is deliberately not here: the
+ * rating, end-of-list and consent detectors read English, and a French page
+ * would break them silently. Only the region and the search phrase change.
+ */
+export const MarketSchema = z
+  .object({
+    /** Decides how phones and addresses are parsed. */
+    country: MarketCountrySchema.default('US'),
+    /**
+     * The Maps search phrase. Placeholders: `{category}`, `{city}`,
+     * `{stateCode}`, `{zip}`.
+     */
+    queryTemplate: z.string().min(1).default('{category} in {city}, {stateCode}'),
+    /** Google's region bias for results (`gl`), lowercase two letters. */
+    gl: z
+      .string()
+      .regex(/^[a-z]{2}$/, 'two lowercase letters, e.g. us or fr')
+      .default('us'),
+    /** Sent by the email crawler, so a bilingual site serves the right language. */
+    acceptLanguage: z.string().min(1).default('en-US,en;q=0.9'),
+  })
+  .strict()
+  .superRefine((market, ctx) => {
+    if (!market.queryTemplate.includes('{category}')) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['queryTemplate'],
+        message: 'queryTemplate must contain {category}',
+      });
+    }
+  });
+
 export const DatabaseSchema = z
   .object({
     /** Only `sqlite` is implemented. `postgres` is a deliberate future option. */
@@ -328,6 +367,7 @@ export const ConfigSchema = z
     // `.default({})` would demand a fully-populated object here.
     project: ProjectSchema.prefault({}),
     seeds: SeedsSchema.prefault({}),
+    market: MarketSchema.prefault({}),
     ui: UiSchema.prefault({}),
     database: DatabaseSchema.prefault({}),
     logging: LoggingSchema.prefault({}),

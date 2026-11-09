@@ -15,6 +15,8 @@ export interface FetchOptions {
   readonly maxBytes?: number;
   readonly maxRedirects?: number;
   readonly userAgent?: string;
+  /** Default: US English. A French campaign asks for French. */
+  readonly acceptLanguage?: string;
   readonly proxy?: ProxySettings | null;
   readonly signal?: AbortSignal;
 }
@@ -110,7 +112,7 @@ export async function fetchPage(url: string, options: FetchOptions = {}): Promis
       headers: {
         'user-agent': options.userAgent ?? DEFAULT_UA,
         accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-        'accept-language': 'en-US,en;q=0.9',
+        'accept-language': options.acceptLanguage ?? 'en-US,en;q=0.9',
         // `request()` does NOT decompress these — see decompress() below, which
         // does. Believing otherwise is what made every extraction run over
         // compressed bytes.

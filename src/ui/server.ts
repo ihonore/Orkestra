@@ -488,11 +488,54 @@ export function brandPage(html: string, name: string): string {
     .replace('<div class="brand">gms<span>.</span>', `<div class="brand">${safe}<span>.</span>`);
 }
 
+/**
+ * US wording on the page and what a French campaign calls the same thing.
+ *
+ * Exact strings, so a change to the page that breaks one shows up as a
+ * failing test rather than a page half in each vocabulary.
+ */
+export const FRENCH_LABELS: readonly (readonly [string, string])[] = [
+  [
+    'placeholder="Search city, state or zip…"',
+    'placeholder="Search city, département or postcode…"',
+  ],
+  ['<th>City</th><th>State</th><th>Zip</th>', '<th>City</th><th>Dépt</th><th>Postcode</th>'],
+  ['>By state</button>', '>By département</button>'],
+  ['<option value="">All states</option>', '<option value="">All départements</option>'],
+  ['>Spread across states</option>', '>Spread across départements</option>'],
+  ['>One state at a time</option>', '>One département at a time</option>'],
+  ['<label>Chosen states</label>', '<label>Chosen départements</label>'],
+  ['>Clear states</button>', '>Clear départements</button>'],
+  ['> One file per state</label>', '> One file per département</label>'],
+  ['Rows are matched by zip and service name', 'Rows are matched by postcode and service name'],
+  [
+    "{ k: 'city', label: 'City', ph: 'Atlanta', w: 170 }",
+    "{ k: 'city', label: 'City', ph: 'Paris 11e', w: 170 }",
+  ],
+  [
+    "{ k: 'stateCode', label: 'State', ph: 'GA', w: 60 }",
+    "{ k: 'stateCode', label: 'Dépt', ph: '75', w: 60 }",
+  ],
+  [
+    "{ k: 'zip', label: 'Zip', ph: '30303', w: 90 }",
+    "{ k: 'zip', label: 'Postcode', ph: '75011', w: 90 }",
+  ],
+  ["ph: '33.7533, -84.3899'", "ph: '48.8590, 2.3800'"],
+];
+
+/** The page in the campaign's vocabulary: départements and postcodes in France. */
+export function localizePage(html: string, country: string): string {
+  if (country !== 'FR') return html;
+  let out = html;
+  for (const [us, fr] of FRENCH_LABELS) out = out.replaceAll(us, fr);
+  return out;
+}
+
 export function startUiServer(options: UiServerOptions): Promise<RunningServer> {
   const { config } = options;
   const host = options.host ?? '127.0.0.1';
   const port = options.port ?? config.ui.port;
-  const page = brandPage(PAGE, config.project.name);
+  const page = localizePage(brandPage(PAGE, config.project.name), config.market.country);
 
   const tasks =
     options.allowControl === true

@@ -20,7 +20,7 @@ import {
   runGoogleMapsJob,
   type GoogleMapsCursor,
 } from '../../automations/google-maps/index.js';
-import { buildQuery } from '../../automations/google-maps/search.js';
+import { buildQuery, type SearchTarget } from '../../automations/google-maps/search.js';
 import type { MergeResult } from '../../automations/google-maps/extract/merge.js';
 import { openDatabaseFromConfig } from '../../db/client.js';
 import { syncQueue } from '../../seeds/queue.js';
@@ -53,25 +53,33 @@ export interface RunCommandOptions {
 }
 
 /** Turn one extracted business into the shape the engine persists. */
+function targetOf(params: GoogleMapsJobParams): SearchTarget {
+  return {
+    city: params.city,
+    stateCode: params.stateCode,
+    // Jobs planned before the zip was part of the params carry none.
+    ...(typeof params.zip === 'string' && { zip: params.zip }),
+    category: params.category,
+    lat: params.lat,
+    lng: params.lng,
+  };
+}
+
 function toPersistable(
   result: MergeResult,
   params: GoogleMapsJobParams,
   rank: number,
   automationId: string,
   runId: string,
+  queryTemplate: string,
 ): PersistableRecord {
   const b = result.business;
   return {
     rank,
     seedCityId: params.cityId,
     seedCategoryId: params.categoryId,
-    searchQuery: buildQuery({
-      city: params.city,
-      stateCode: params.stateCode,
-      category: params.category,
-      lat: params.lat,
-      lng: params.lng,
-    }),
+    // The phrase actually searched, from the same template the job used.
+    searchQuery: buildQuery(targetOf(params), queryTemplate),
     // A social profile is recorded but never queued for crawling; a business
     // with no website has no domain row at all.
     domain: b.domain !== null ? { name: b.domain, isSocial: b.domainIsSocial } : null,
@@ -217,13 +225,7 @@ export async function runRun(options: RunCommandOptions): Promise<void> {
    */
   const handler: JobHandler = async (ctx) => {
     const params = JSON.parse(ctx.lease.job.params_json) as GoogleMapsJobParams;
-    const target = {
-      city: params.city,
-      stateCode: params.stateCode,
-      category: params.category,
-      lat: params.lat,
-      lng: params.lng,
-    };
+    const target = targetOf(params);
 
     const lease = await pool.lease({ proxy: proxies.acquire('browser') });
     const buffered: PersistableRecord[] = [];
@@ -233,6 +235,8 @@ export async function runRun(options: RunCommandOptions): Promise<void> {
       const outcome = await runGoogleMapsJob({
         page: lease.page,
         target,
+        search: { queryTemplate: config.market.queryTemplate, gl: config.market.gl },
+        country: config.market.country,
         signal: ctx.signal,
         logger: ctx.logger,
         maxListings: 120,
@@ -244,7 +248,16 @@ export async function runRun(options: RunCommandOptions): Promise<void> {
           cursor = next;
         },
         onRecord: (result, rank) => {
-          buffered.push(toPersistable(result, params, rank, automationId, ctx.runId));
+          buffered.push(
+            toPersistable(
+              result,
+              params,
+              rank,
+              automationId,
+              ctx.runId,
+              config.market.queryTemplate,
+            ),
+          );
         },
       });
 

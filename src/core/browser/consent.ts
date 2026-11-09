@@ -27,20 +27,25 @@ export type ConsentResult = 'not-shown' | 'rejected' | 'accepted' | 'failed';
  * Selectors for the reject control, most specific first.
  *
  * `aria-label` and button text are used rather than the hashed class names the
- * legacy flow relied on. Text matching is only safe because every URL pins
- * `hl=en`; under another locale these read "Alle ablehnen" and match nothing.
+ * legacy flow relied on. Every URL pins `hl=en`, but Google has been seen
+ * serving a localised wall anyway — most likely from an EU address — so the
+ * French and German labels are listed too.
  */
 const REJECT_SELECTORS: readonly string[] = [
   'button[aria-label="Reject all"]',
   'button:has-text("Reject all")',
   'form[action*="consent"] button:has-text("Reject all")',
   '[role="button"]:has-text("Reject all")',
+  'button[aria-label="Tout refuser"]',
+  'button:has-text("Tout refuser")',
   'button[aria-label="Alle ablehnen"]',
 ];
 
 const ACCEPT_SELECTORS: readonly string[] = [
   'button[aria-label="Accept all"]',
   'button:has-text("Accept all")',
+  'button[aria-label="Tout accepter"]',
+  'button:has-text("Tout accepter")',
 ];
 
 /** Whether the current page is a consent interstitial. */
@@ -83,42 +88,38 @@ export async function handleConsent(
   const selectors = options.preferReject === false ? ACCEPT_SELECTORS : REJECT_SELECTORS;
   const outcome: ConsentResult = options.preferReject === false ? 'accepted' : 'rejected';
 
-  for (const selector of selectors) {
-    const control = page.locator(selector).first();
-    try {
-      await control.waitFor({ state: 'visible', timeout: timeoutMs });
-    } catch {
-      continue; // Try the next selector.
-    }
-
-    try {
-      // The click navigates; waiting for load state rather than a fixed pause
-      // means this is as fast as the network allows and still correct.
-      await Promise.all([
-        page.waitForLoadState('domcontentloaded', { timeout: timeoutMs }).catch(() => undefined),
-        control.click({ timeout: timeoutMs }),
-      ]);
-      options.logger?.debug({ selector }, 'consent cleared');
-      return outcome;
-    } catch (error) {
-      options.logger?.debug({ selector, err: String(error) }, 'consent click failed');
-    }
+  // One wait for whichever label is on the page, rather than one full wait
+  // per label: waiting label by label, a wall that matched none of them cost
+  // five seconds per label before the job gave up.
+  const selector = selectors.join(', ');
+  const control = page.locator(selector).first();
+  try {
+    await control.waitFor({ state: 'visible', timeout: timeoutMs });
+    // The click navigates; waiting for load state rather than a fixed pause
+    // means this is as fast as the network allows and still correct.
+    await Promise.all([
+      page.waitForLoadState('domcontentloaded', { timeout: timeoutMs }).catch(() => undefined),
+      control.click({ timeout: timeoutMs }),
+    ]);
+    options.logger?.debug({ selector }, 'consent cleared');
+    return outcome;
+  } catch (error) {
+    options.logger?.debug({ err: String(error) }, 'no consent control could be operated');
   }
 
   // Still on a consent URL with no control we could operate: a real failure.
   return isConsentUrl(page.url()) ? 'failed' : 'not-shown';
 }
 
+/** Whether any consent control is visible, waiting once for all of them. */
 async function hasAnyControl(page: Page, timeoutMs: number): Promise<boolean> {
-  for (const selector of [...REJECT_SELECTORS, ...ACCEPT_SELECTORS]) {
-    try {
-      await page.locator(selector).first().waitFor({ state: 'visible', timeout: timeoutMs });
-      return true;
-    } catch {
-      // Not this one.
-    }
+  const selector = [...REJECT_SELECTORS, ...ACCEPT_SELECTORS].join(', ');
+  try {
+    await page.locator(selector).first().waitFor({ state: 'visible', timeout: timeoutMs });
+    return true;
+  } catch {
+    return false;
   }
-  return false;
 }
 
 /**

@@ -21,8 +21,9 @@ import {
   normalizeWebsiteUrl,
   parseRating,
   parseReviewCount,
-  parseUsAddress,
+  parseAddress,
   toE164,
+  type Country,
   dedupHash,
 } from '../normalize.js';
 
@@ -65,6 +66,8 @@ export interface MergeInput {
   readonly xhr: XhrExtraction;
   readonly dom: DomExtraction;
   readonly gmapsUrl: string;
+  /** Decides how the phone and address are read. Default: US. */
+  readonly country?: Country;
   /** Channel priority, highest first. */
   readonly channels?: readonly Channel[];
 }
@@ -145,12 +148,23 @@ export function mergeExtractions(input: MergeInput): MergeResult {
     panelFirst,
   );
 
+  const country = input.country ?? 'US';
+
   // Only accept a phone that actually normalizes. See {@link pick}.
-  const phoneRaw = take<string>(
+  let phoneRaw = take<string>(
     'phoneRaw',
     { xhr: input.xhr.phone, dom: input.dom.phone },
-    (value) => toE164(value) !== null,
+    (value) => toE164(value, country) !== null,
   );
+  // The panel's phone row is about this listing and nothing else. If no
+  // channel offered a number the country's rule accepts — a foreign or
+  // unusual number — keep what the panel shows rather than nothing: someone
+  // can still call it.
+  const panelPhone = input.dom.phone;
+  if (phoneRaw === null && panelPhone !== null && /\d{6}/.test(panelPhone.replace(/\D/g, ''))) {
+    phoneRaw = panelPhone;
+    provenance.phoneRaw = 'dom';
+  }
   // An address must at least contain a digit and a comma; the XHR channel
   // otherwise offers category names and opaque ids that look address-shaped.
   const addressRaw = take<string>(
@@ -182,8 +196,8 @@ export function mergeExtractions(input: MergeInput): MergeResult {
     dom: parseReviewCount(input.dom.reviews),
   });
 
-  const address = parseUsAddress(addressRaw);
-  const phoneE164 = toE164(phoneRaw);
+  const address = parseAddress(addressRaw, country);
+  const phoneE164 = toE164(phoneRaw, country);
 
   const business: MergedBusiness = {
     cid,

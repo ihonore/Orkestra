@@ -129,6 +129,7 @@ export async function runEnrichEmails(options: EnrichCommandOptions): Promise<vo
           maxEmailsPerDomain: config.enrichment.websiteEmails.maxEmailsPerDomain,
           respectRobots: config.http.respectRobots,
           perRequestDelayMs: config.http.perHostDelayMs,
+          acceptLanguage: config.market.acceptLanguage,
           validation: {
             excludeGovernment: config.enrichment.websiteEmails.validation.excludeGovernment,
             excludeEducation: config.enrichment.websiteEmails.validation.excludeEducation,

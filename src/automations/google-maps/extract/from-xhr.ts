@@ -16,6 +16,7 @@
  *  - the merge layer records which channel supplied each field, so a fill-rate
  *    drop can be attributed rather than guessed at.
  */
+import type { Country } from '../normalize.js';
 
 /** Endpoints that carry place data. Matched loosely — Google renames these. */
 const PLACE_ENDPOINTS = [
@@ -216,13 +217,25 @@ const URL_RE = /^https?:\/\//i;
 const PHONE_RE = /^(?:\+1[\s-]?)?\(?[2-9]\d{2}\)?[\s.-]?[2-9]\d{2}[\s.-]?\d{4}$/;
 
 /**
+ * A plausible French number: `01 42 33 44 55` or `+33 1 42 33 44 55`, spaced,
+ * dotted or not. Anchored as tightly as the US one, for the same reason.
+ */
+const FR_PHONE_RE = /^(?:\+33[\s.-]?(?:\(0\)[\s.-]?)?[1-9]|0[1-9])(?:[\s.-]?\d{2}){4}$/;
+
+const PHONE_PATTERNS: Readonly<Record<Country, RegExp>> = { US: PHONE_RE, FR: FR_PHONE_RE };
+
+/**
  * Extract what a place payload contains.
  *
  * Every field is optional by construction. A payload whose shape has moved
  * yields nulls, the DOM channel fills the gap, and the health guard notices the
  * fill-rate drop — rather than the job throwing and the run stopping.
  */
-export function extractFromXhr(payload: unknown, target?: PlaceIdentity): XhrExtraction {
+export function extractFromXhr(
+  payload: unknown,
+  target?: PlaceIdentity,
+  country: Country = 'US',
+): XhrExtraction {
   if (payload === null || payload === undefined) return EMPTY;
 
   // With a target, only its own record counts, and a payload about other
@@ -256,7 +269,14 @@ export function extractFromXhr(payload: unknown, target?: PlaceIdentity): XhrExt
   const website = asString(findFirst(node, isBusinessUrl, own));
 
   const phone = asString(
-    findFirst(node, (v) => typeof v === 'string' && PHONE_RE.test(v) && /\d{7}/.test(v), own),
+    findFirst(
+      node,
+      (v) =>
+        typeof v === 'string' &&
+        PHONE_PATTERNS[country].test(v) &&
+        (country !== 'US' || /\d{7}/.test(v)),
+      own,
+    ),
   );
 
   // Coordinates arrive as a [lat, lng] pair of plausible magnitude.
@@ -309,6 +329,9 @@ export function extractFromXhr(payload: unknown, target?: PlaceIdentity): XhrExt
 export class XhrCollector {
   readonly #payloads: unknown[] = [];
 
+  /** @param country decides which phone numbers are recognised. */
+  constructor(readonly country: Country = 'US') {}
+
   get payloads(): readonly unknown[] {
     return this.#payloads;
   }
@@ -336,7 +359,7 @@ export class XhrCollector {
   best(target?: PlaceIdentity): XhrExtraction {
     let merged: XhrExtraction = EMPTY;
     for (const payload of this.#payloads) {
-      const next = extractFromXhr(payload, target);
+      const next = extractFromXhr(payload, target, this.country);
       merged = {
         name: next.name ?? merged.name,
         placeId: next.placeId ?? merged.placeId,

@@ -5,12 +5,15 @@
  *
  * ## Locale is pinned, not configurable
  *
- * `hl=en&gl=us` is a constant, not a knob. Three separate mechanisms depend on
+ * `hl=en` is a constant, not a knob. Three separate mechanisms depend on
  * English: the rating's `aria-label*="star"`, the end-of-list sentinel text, and
  * the consent button labels. Verification observed Google serving a French
  * bundle unprompted to a US-looking request, so this is a live failure mode, not
  * a theoretical one — and it fails *silently*, producing null ratings rather
  * than an error.
+ *
+ * The region (`gl`) is the one part a campaign may change: it biases which
+ * places rank first, not the language of the page.
  *
  * ## Termination is driven by count stagnation
  *
@@ -37,6 +40,8 @@ export type SearchMode = 'query' | 'coordinates';
 export interface SearchTarget {
   readonly city: string;
   readonly stateCode: string;
+  /** The seed city's zip or postal code, for templates that name it. */
+  readonly zip?: string;
   readonly category: string;
   readonly lat: number;
   readonly lng: number;
@@ -44,8 +49,10 @@ export interface SearchTarget {
 
 export interface BuildUrlOptions {
   readonly mode?: SearchMode;
-  /** Template with `{category}`, `{city}`, `{stateCode}` placeholders. */
+  /** Template with `{category}`, `{city}`, `{stateCode}`, `{zip}` placeholders. */
   readonly queryTemplate?: string;
+  /** Region bias, e.g. `fr`. Default: {@link LOCALE_PARAMS}.gl. */
+  readonly gl?: string;
   readonly zoom?: number;
 }
 
@@ -57,6 +64,8 @@ export function buildQuery(target: SearchTarget, template = DEFAULT_QUERY_TEMPLA
     .replaceAll('{category}', target.category)
     .replaceAll('{city}', target.city)
     .replaceAll('{stateCode}', target.stateCode)
+    .replaceAll('{zip}', target.zip ?? '')
+    .replace(/\s+/g, ' ')
     .trim();
 }
 
@@ -74,13 +83,13 @@ export function buildSearchUrl(target: SearchTarget, options: BuildUrlOptions = 
     const zoom = options.zoom ?? 13;
     const url = new URL(`https://www.google.com/maps/@${target.lat},${target.lng},${zoom}z`);
     url.searchParams.set('hl', LOCALE_PARAMS.hl);
-    url.searchParams.set('gl', LOCALE_PARAMS.gl);
+    url.searchParams.set('gl', options.gl ?? LOCALE_PARAMS.gl);
     return url.toString();
   }
 
   const url = new URL(`https://www.google.com/maps/search/${encodeURIComponent(query)}`);
   url.searchParams.set('hl', LOCALE_PARAMS.hl);
-  url.searchParams.set('gl', LOCALE_PARAMS.gl);
+  url.searchParams.set('gl', options.gl ?? LOCALE_PARAMS.gl);
   return url.toString();
 }
 

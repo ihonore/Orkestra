@@ -26,6 +26,8 @@ import {
 export interface CrawlOptions {
   readonly domain: string;
   readonly startUrl: string;
+  /** Sent with every request, so a bilingual site answers in this language. */
+  readonly acceptLanguage?: string;
   readonly maxDepth?: number;
   readonly maxPages?: number;
   readonly maxTimeMs?: number;
@@ -213,6 +215,7 @@ export async function crawlDomain(options: CrawlOptions): Promise<CrawlResult> {
 
     const page = await fetchPage(next.url, {
       timeoutMs: 15_000,
+      ...(options.acceptLanguage !== undefined && { acceptLanguage: options.acceptLanguage }),
       maxBytes: Math.min(2 * 1024 * 1024, maxBytes - bytesFetched),
       ...(options.proxy !== undefined && { proxy: options.proxy }),
       ...(options.signal !== undefined && { signal: options.signal }),
