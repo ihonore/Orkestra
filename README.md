@@ -79,6 +79,32 @@ gms ui --control  # open the dashboard and do everything else there
 **Without installing**, every command also works as `npm run gms -- <command>`
 from the project directory — e.g. `npm run gms -- ui --control`.
 
+## Campaigns
+
+The repository root is one campaign: its `gms.config.yaml`, `seeds/` and `data/`. Another lives
+in its own folder under `campaigns/`, with its own settings, lists, database, Google Sheet and
+dashboard port, and shares nothing with the root but the code:
+
+```bash
+gms --campaign gobadiz ui --control      # campaigns/gobadiz, dashboard on port 4601
+npm run gobadiz                          # the same, without installing gms
+```
+
+`--campaign <name>` behaves exactly as if gms were started inside `campaigns/<name>/`. The
+dashboard's settings land in that folder's `gms.config.local.yaml`, and the tasks it starts run
+there too. Without the flag, everything is the root campaign as before.
+
+A campaign's config chooses what makes it different:
+- `market`: the country whose phones and addresses are parsed, the Maps search phrase and region,
+  and the crawler's language.
+- `seeds.dir` and `ui.port`.
+- `qualify`: the rules for which leads it wants.
+- `exporters.sheets.layout`.
+
+**[campaigns/gobadiz](campaigns/gobadiz/README.md)** is the French beauty-professionals campaign
+for Gobadiz. It covers Paris by arrondissement, with French phones and addresses, Instagram and
+booking-platform detection, chain and category exclusions, and a French one-row-per-lead sheet.
+
 ## Moving to another machine
 
 **Windows VPS:** copy `scripts/windows/install.cmd` onto it and double-click.
@@ -118,6 +144,8 @@ flags from the CLI itself.
 | `gms queue [--states TX,FL] [--only]` | Choose which searches run first. Spreads across states by default |
 | `gms run` | Scrape Google Maps into the database |
 | `gms enrich emails` | Crawl business websites for contact addresses |
+| `gms qualify` | Apply a campaign's rules: specialties, exclusions, leads ready to send |
+| `gms suppress add\|list\|remove` | The opt-out list every export honours |
 | `gms status [--by city\|category\|state]` | Queue progress, throughput, ETA |
 | `gms jobs list\|retry` | Inspect and steer individual jobs |
 | `gms ui [--control]` | Local dashboard — run the whole pipeline from a browser |
@@ -128,7 +156,7 @@ flags from the CLI itself.
 | `gms db backup <path>` | Consistent copy, safe while the database is in use |
 
 Global flags work with any command, before or after it: `-c, --config <path>`,
-`--data-dir <path>`, `--log-level <level>`. Most commands also take `--json`.
+`--campaign <name>`, `--data-dir <path>`, `--log-level <level>`. Most commands also take `--json`.
 
 ## Configuration
 
@@ -194,11 +222,17 @@ Violations fail the build rather than producing a warning.
 Scraping Google Maps is contrary to Google's Terms of Service. That is a contract matter rather than
 a criminal one for public data in the US, but it is a real risk and should be an informed decision.
 
-More operationally binding is what you do with the output. **CAN-SPAM** requires accurate headers, a
-valid physical postal address and a working opt-out honoured promptly; it needs no prior consent and
-has no B2B carve-out. A suppression list is part of the schema from the start for that reason.
-GDPR/ePrivacy makes emailing EU natural persons materially riskier, so keep the seed data US-only
-and enforce that at send time rather than at collection time. Note also that the CCPA/CPRA B2B
-exemption expired in 2023, so a Californian's work email is covered personal information.
+More operationally binding is what you do with the output.
+
+- **US:** **CAN-SPAM** requires accurate headers, a valid physical postal address and a working
+  opt-out honoured promptly. It needs no prior consent and has no B2B carve-out. The CCPA/CPRA B2B
+  exemption expired in 2023, so a Californian's work email is covered personal information.
+- **France and the EU:** GDPR applies, and an independent's email and mobile are personal data.
+  Prospecting a professional about their trade is allowed without consent, with an opt-out in
+  every message and the data's source given in the first one (GDPR art. 14). The Gobadiz
+  campaign's README sets this out.
+
+Either way, record every opt-out with `gms suppress add` (or the box on the dashboard's Leads
+page). Every lead export leaves out what is on that list.
 
 Do not scrape behind a login. Business websites' `robots.txt` is respected by default.

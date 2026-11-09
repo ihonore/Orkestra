@@ -84,3 +84,14 @@ once the dashboard starts at sign-in.
   and save their place, and the browser closes. Then the scrape exits.
 - The dashboard only answers on `127.0.0.1`, so it is reachable from the VPS
   itself, or through a tunnel: `ssh -L 4600:127.0.0.1:4600 you@vps`.
+
+### Another campaign
+
+Each folder under `campaigns\` is a separate campaign with its own database.
+Every update runs `db migrate` for each of them. To open one's dashboard, run
+`scripts\windows\start-dashboard.cmd gobadiz 4601`. The second argument is
+that campaign's `ui.port`.
+
+Two campaigns scraping at once share the VPS's IP address. Google answers
+heavy traffic from one address with blocks, so let one scrape at a time, or
+give each fewer workers.

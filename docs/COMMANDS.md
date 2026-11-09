@@ -49,6 +49,7 @@ are the same.
 | Flag                    | Meaning                                                                                                                     |
 | ----------------------- | --------------------------------------------------------------------------------------------------------------------------- |
 | `-c, --config <path>` | Config file to read. Default: look in the**current directory** for `gms.config.yaml`, then `.yml`, then `.json` |
+| `--campaign <name>`   | Run the campaign in `campaigns/<name>/`, exactly as if gms were started in that folder: its config, local config, lists and database. Cannot be combined with `-c` |
 | `--data-dir <path>`   | Override`project.dataDir` for this one invocation                                                                         |
 | `--log-level <level>` | `trace` \| `debug` \| `info` \| `warn` \| `error` \| `fatal`                                                    |
 | `-v, --version`       | Print the version and exit — including after a subcommand, so`gms run -v` prints the version instead of running          |
@@ -65,6 +66,10 @@ Three things about config discovery that cost real time when you don't know them
   file only, so the same machine can give two different answers.
 - **`gms ui --control` has no short form.** `-c` belongs to `--config` here as
   everywhere else, so it cannot also mean `--control`.
+
+- **`--campaign` keeps the local overlay.** Unlike `-c`, it reads the campaign
+  folder's `gms.config.local.yaml` too, and the dashboard writes its settings
+  there. It works from any directory.
 
 Almost every command takes `--json` for machine-readable output. The exceptions
 are `gms import sheets`, `gms jobs retry`, `gms db check`, `gms db vacuum` and
@@ -614,9 +619,17 @@ Entities:
 - `leads-flat`: one row per address, plus businesses with none yet. Such a
   business is a blank row now, then a second row once an email is found.
 - `businesses` and `emails`.
+- **`prospects`**: for a campaign with `qualify` on (Gobadiz). One row per
+  wanted lead, with French headers, sent once its email search is over,
+  **with or without an email**. It carries a Priorité (A/B/C) and the
+  Instagram and booking-platform columns. Its position is the lead's
+  `lead_seq`, so each lead is sent exactly once. See
+  [campaigns/gobadiz/README.md](../campaigns/gobadiz/README.md).
+- Every lead export leaves out what is on the opt-out list: suppressed
+  addresses, domains, phones and listings (`gms suppress`).
 
-The sheet's **layout** setting (`exporters.sheets.layout`: `business`, `email`
-or `all`, set in step 7) chooses among the first three for `gms export sheets`,
+The sheet's **layout** setting (`exporters.sheets.layout`: `business`, `email`,
+`all` or `prospects`, set in step 7) chooses among the lead views for `gms export sheets`,
 the dashboard's button and autopilot alike. The default is `business`, written
 to its own tab, `exporters.sheets.businessSheetName` ("Leads by business"),
 because its columns differ. The two per-address exports share a tab and a
@@ -688,6 +701,38 @@ view emits one row per (business, email). The second one is what lets an address
 found *after* a business was exported still reach the sheet.
 
 ---
+
+## Campaign leads
+
+### `gms qualify`
+
+Applies the campaign's `qualify` rules to every stored business, and reports
+what they did. The same pass runs on its own before every email crawl and
+every export, so this command is for looking, not something to remember.
+
+Each business gets:
+- a **specialty**, from its Google category through `categoriesFile`, else
+  from the search that found it;
+- an **exclusion reason** when the campaign does not want it: closed, a chain
+  (`exclusionsFile`, or `chainSiteThreshold` listings sharing one website), an
+  excluded category, a name rule, or out of area (`activeAreasOnly`: no active
+  city in its département);
+- a **lead_seq** once it is wanted and its website has been crawled, or it
+  has none worth crawling.
+
+The website of a business that is not wanted leaves the crawl queue, and comes
+back when a rule change or a newly activated city makes it wanted. The report
+lists Google categories missing from the category map.
+
+Off unless `qualify.enabled` is set. The main campaign has it off.
+
+### `gms suppress add|list|remove`
+
+The opt-out list. `add` takes any number of emails, phone numbers (in any
+format: they are normalised for the campaign's country) and websites; `-r`
+records why. Every lead export leaves them out from then on, and the crawler
+skips a suppressed website. `remove` undoes a mistake. The dashboard's Leads
+page has the same box.
 
 ## Database maintenance
 
