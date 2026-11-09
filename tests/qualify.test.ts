@@ -120,6 +120,25 @@ describe('the Gobadiz rules', () => {
     expect(reason({ permanentlyClosed: true })).toBe('Fermé définitivement');
   });
 
+  it('leaves out what a search drags in from other trades', () => {
+    // "locks Paris 11e" finds dreadlock specialists, and locksmiths.
+    expect(reason({ name: 'Serrurier Paris 11', category: 'Locksmith' })).toBe(
+      'Pas un métier Gobadiz',
+    );
+    expect(reason({ name: 'Loc Queen', category: 'Loctician service' })).toBeNull();
+    expect(reason({ category: 'Training center' })).toBe('École');
+    expect(reason({ category: 'Medical laboratory' })).toBe('Médical');
+  });
+
+  it('knows every category the Paris run found', () => {
+    // An unknown category is wanted by default, which is how 80 locksmiths
+    // reached the sheet. `gms qualify` lists any new ones.
+    const known = gobadizRules().categories;
+    for (const category of ['Wellness center', 'Restaurant', 'Store', 'Dentist', 'Sauna']) {
+      expect(known.has(fold(category)), category).toBe(true);
+    }
+  });
+
   it('holds back a suburb until its département is switched on', () => {
     expect(reason({ region: '93' })).toBe('Hors zone (93)');
     expect(qualify(salon({ region: '93' }), rules, new Set(['75', '93'])).exclusionReason).toBe(
