@@ -125,6 +125,43 @@ const NON_WEBSITE_DOMAINS = new Set([
   'taplink.cc',
 ]);
 
+/**
+ * Hosts where each customer's site is a subdomain: salon.wixsite.com,
+ * monsalon.webnode.fr. Their registrable domain is the builder's, so every
+ * site on one builder used to share one domain row — and the crawl of that
+ * row refused its own start URL as off-site, fetching nothing at all. Such a
+ * site is identified by its full host instead.
+ */
+const SITE_BUILDER_SUFFIXES = new Set([
+  'wixsite.com',
+  'wixstudio.io',
+  'jimdofree.com',
+  'jimdosite.com',
+  'webnode.fr',
+  'webnode.com',
+  'webnode.page',
+  'e-monsite.com',
+  'over-blog.com',
+  'sitew.fr',
+  'sitew.com',
+  'blogspot.com',
+  'wordpress.com',
+  'weebly.com',
+  'webflow.io',
+  'godaddysites.com',
+  'square.site',
+  'carrd.co',
+  'site123.me',
+  'strikingly.com',
+  'mystrikingly.com',
+  'canva.site',
+  'framer.website',
+  'vercel.app',
+  'netlify.app',
+  'lovable.app',
+  'github.io',
+]);
+
 export interface DomainInfo {
   /** Registrable domain, lowercased, no `www`. */
   readonly domain: string;
@@ -143,8 +180,11 @@ export function domainOf(websiteUrl: string | null | undefined): DomainInfo | nu
   if (websiteUrl === null || websiteUrl === undefined || websiteUrl === '') return null;
 
   const parsed = parseDomain(websiteUrl);
-  const domain = parsed.domain?.toLowerCase();
+  let domain = parsed.domain?.toLowerCase();
   if (domain === undefined || domain === null || domain === '') return null;
+
+  const host = parsed.hostname?.toLowerCase().replace(/^www\./, '') ?? null;
+  if (SITE_BUILDER_SUFFIXES.has(domain) && host !== null && host !== domain) domain = host;
 
   // A booking platform's pages carry the platform's addresses: crawling
   // planity.com for one salon would pin Planity's email on every salon there.

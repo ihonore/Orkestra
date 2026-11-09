@@ -17,9 +17,14 @@ export interface ScoredLink {
   readonly depth: number;
 }
 
-/** Path or anchor keywords that indicate a contact-bearing page. */
+/**
+ * Path or anchor keywords that indicate a contact-bearing page, in English
+ * and French. "contact" already covers nous-contacter and contactez-nous.
+ * French law requires every business site to publish "mentions légales" with
+ * the publisher's contact details, which makes it the surest page there is.
+ */
 const CONTACT_KEYWORDS =
-  /(contact|contact-us|contactus|about|about-us|aboutus|team|our-team|staff|people|meet|impressum|kontakt|support|reach|connect|get-in-touch|enquir|inquir)/i;
+  /(contact|contact-us|contactus|about|about-us|aboutus|team|our-team|staff|people|meet|impressum|kontakt|support|reach|connect|get-in-touch|enquir|inquir|mentions|propos|qui-sommes|equipe|infos-pratiques|nous-trouver|rendez-vous)/i;
 
 /** Sections that are long, numerous, and almost never hold a contact address. */
 const LOW_VALUE_PATHS =
@@ -33,7 +38,7 @@ const NON_PAGE =
   /(\.(jpg|jpeg|png|gif|svg|webp|ico|css|js|json|xml|pdf|zip|mp4|mp3|woff2?|ttf)($|\?)|\/wp-content\/|\/wp-json\/|\/feed\/?$|\/rss)/i;
 
 /** Legal pages: low yield, but they do sometimes carry a contact address. */
-const LEGAL = /(privacy|terms|legal|disclaimer|cookie)/i;
+const LEGAL = /(privacy|terms|legal|disclaimer|cookie|cgv|confidentialite)/i;
 
 export interface ScoreOptions {
   readonly depth?: number;
@@ -105,6 +110,12 @@ export class LinkFrontier {
       /** Same registrable domain only, unless this is true. */
       readonly followSubdomains?: boolean;
       readonly siteDomain: string;
+      /**
+       * The host the crawl starts on, which is on-site even when it is a
+       * subdomain (paris.monsalon.fr for monsalon.fr): otherwise the start
+       * page itself is refused and the site yields nothing.
+       */
+      readonly startHost?: string;
     },
   ) {}
 
@@ -166,6 +177,8 @@ export class LinkFrontier {
     try {
       const host = new URL(url).hostname.toLowerCase().replace(/^www\./, '');
       const site = this.options.siteDomain.toLowerCase().replace(/^www\./, '');
+      const start = this.options.startHost?.toLowerCase().replace(/^www\./, '');
+      if (start !== undefined && host === start) return true;
       return this.options.followSubdomains === true ? host.endsWith(site) : host === site;
     } catch {
       return false;

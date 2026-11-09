@@ -130,6 +130,7 @@ export async function runEnrichEmails(options: EnrichCommandOptions): Promise<vo
           respectRobots: config.http.respectRobots,
           perRequestDelayMs: config.http.perHostDelayMs,
           acceptLanguage: config.market.acceptLanguage,
+          guessPaths: config.enrichment.websiteEmails.guessPaths,
           validation: {
             excludeGovernment: config.enrichment.websiteEmails.validation.excludeGovernment,
             excludeEducation: config.enrichment.websiteEmails.validation.excludeEducation,

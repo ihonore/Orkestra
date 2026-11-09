@@ -34,6 +34,8 @@ export interface CrawlOptions {
   readonly startUrl: string;
   /** Sent with every request, so a bilingual site answers in this language. */
   readonly acceptLanguage?: string;
+  /** Paths tried on every site. Default: {@link COMMON_CONTACT_PATHS}. */
+  readonly guessPaths?: readonly string[];
   readonly maxDepth?: number;
   readonly maxPages?: number;
   readonly maxTimeMs?: number;
@@ -97,7 +99,7 @@ export interface CrawlResult {
 
 /** Phrases that mean the domain is for sale or unconfigured. */
 const PARKED_MARKERS =
-  /(this domain (is|may be) for sale|buy this domain|parked (free )?(at|by)|domain (parking|expired)|under construction|coming soon|godaddy\.com\/domainsearch|sedoparking)/i;
+  /(this domain (is|may be) for sale|buy this domain|parked (free )?(at|by)|domain (parking|expired)|under construction|coming soon|godaddy\.com\/domainsearch|sedoparking|site en construction|nom de domaine (est )?(à|a) vendre|ce domaine est (à|a) vendre|bient(ô|o)t disponible)/i;
 
 /**
  * Crawl one domain for addresses.
@@ -124,9 +126,15 @@ export async function crawlDomain(options: CrawlOptions): Promise<CrawlResult> {
   let isDirectoryLike = false;
   let stoppedBecause = 'frontier-empty';
 
-  const base = (): { origin: string } | null => {
+  // Off-site links that say something about the business: its Instagram, the
+  // booking platform its "Prendre rendez-vous" button goes to.
+  const siteLinks: string[] = [];
+  let byAppointment = false;
+
+  const base = (): { origin: string; hostname: string } | null => {
     try {
-      return { origin: new URL(options.startUrl).origin };
+      const start = new URL(options.startUrl);
+      return { origin: start.origin, hostname: start.hostname };
     } catch {
       return null;
     }
@@ -135,11 +143,6 @@ export async function crawlDomain(options: CrawlOptions): Promise<CrawlResult> {
   if (origin === null) {
     return result('failed', 'invalid start URL');
   }
-
-  // Off-site links that say something about the business: its Instagram, the
-  // booking platform its "Prendre rendez-vous" button goes to.
-  const siteLinks: string[] = [];
-  let byAppointment = false;
 
   function result(status: CrawlStatus, error: string | null = null): CrawlResult {
     return {
@@ -173,13 +176,14 @@ export async function crawlDomain(options: CrawlOptions): Promise<CrawlResult> {
   const frontier = new LinkFrontier({
     maxDepth: options.maxDepth ?? 1,
     siteDomain: options.domain,
+    startHost: origin.hostname,
     ...(options.followSubdomains !== undefined && { followSubdomains: options.followSubdomains }),
   });
   frontier.offer(options.startUrl, { depth: 0 });
 
   // Conventional contact paths, tried early. Many sites hide these behind a
   // JavaScript menu this crawler cannot see, and each guess is one cheap request.
-  for (const path of COMMON_CONTACT_PATHS) {
+  for (const path of options.guessPaths ?? COMMON_CONTACT_PATHS) {
     try {
       frontier.offer(new URL(path, origin.origin).toString(), { depth: 1, inNavOrFooter: true });
     } catch {

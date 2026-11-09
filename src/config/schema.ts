@@ -278,6 +278,15 @@ export const EnrichmentSchema = z
         maxBytesPerDomain: z.number().int().min(100_000).default(5_242_880),
         followSubdomains: z.boolean().default(false),
         /**
+         * Paths tried on every site whether or not its pages link to them —
+         * many hide the contact page behind a JavaScript menu. Each costs one
+         * request from the page budget, so list only what the sites use.
+         */
+        guessPaths: z
+          .array(z.string().regex(/^\//, 'a path starting with /'))
+          .max(10)
+          .default(['/contact', '/contact-us', '/about', '/about-us']),
+        /**
          * A page offering more addresses than this is a staff directory, not a
          * business. In the legacy data one university page contributed 67.
          */

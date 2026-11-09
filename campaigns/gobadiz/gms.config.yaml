@@ -32,3 +32,9 @@ market:
   queryTemplate: '{category} {city}'
   gl: fr
   acceptLanguage: fr-FR,fr;q=0.9,en;q=0.5
+
+enrichment:
+  websiteEmails:
+    # French sites: the contact page, and the "mentions légales" every
+    # business site must publish, usually with an email in it.
+    guessPaths: ['/contact', '/nous-contacter', '/mentions-legales']

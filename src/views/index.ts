@@ -41,6 +41,10 @@ const LOW_VALUE_LOCAL_PARTS = [
   'careers', 'jobs', 'hr', 'recruiting', 'recruitment', 'hiring',
   'billing', 'accounts', 'accounting', 'invoices', 'payables', 'payroll', 'ap', 'ar',
   'press', 'media',
+  // French: recruitment, accounts, press, legal.
+  'recrutement', 'emploi', 'candidature', 'candidatures',
+  'compta', 'comptabilite', 'facturation', 'facture', 'factures',
+  'presse', 'juridique',
 ] as const;
 
 /**

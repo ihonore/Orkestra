@@ -160,6 +160,11 @@ export function fromCloudflare(html: string): FoundEmail[] {
     const decoded = match[1] !== undefined ? decodeCfEmail(match[1]) : null;
     if (decoded !== null) found.push({ raw: decoded, method: 'cfemail' });
   }
+  // The link form of the same protection: href="/cdn-cgi/l/email-protection#…".
+  for (const match of html.matchAll(/\/cdn-cgi\/l\/email-protection#([0-9a-f]+)/gi)) {
+    const decoded = match[1] !== undefined ? decodeCfEmail(match[1]) : null;
+    if (decoded !== null) found.push({ raw: decoded, method: 'cfemail' });
+  }
   return found;
 }
 
@@ -172,7 +177,7 @@ export function fromCloudflare(html: string): FoundEmail[] {
 export function fromObfuscated(text: string): FoundEmail[] {
   const found: FoundEmail[] = [];
   const pattern =
-    /([a-z0-9._%+-]+)\s*(?:\(at\)|\[at\]|\{at\}|\sat\s|&#64;|\(@\))\s*([a-z0-9.-]+)\s*(?:\(dot\)|\[dot\]|\{dot\}|\sdot\s)\s*([a-z]{2,63})/gi;
+    /([a-z0-9._%+-]+)\s*(?:\(at\)|\[at\]|\{at\}|\sat\s|&#64;|\(@\)|\(arobase\)|\[arobase\]|\sarobase\s)\s*([a-z0-9.-]+)\s*(?:\(dot\)|\[dot\]|\{dot\}|\sdot\s|\(point\)|\[point\]|\spoint\s)\s*([a-z]{2,63})/gi;
 
   for (const match of text.matchAll(pattern)) {
     const [, local, domain, tld] = match;
@@ -182,7 +187,8 @@ export function fromObfuscated(text: string): FoundEmail[] {
   }
 
   // The simpler `name (at) domain.com` form, where the TLD is not split.
-  const simple = /([a-z0-9._%+-]+)\s*(?:\(at\)|\[at\]|\{at\})\s*([a-z0-9.-]+\.[a-z]{2,63})/gi;
+  const simple =
+    /([a-z0-9._%+-]+)\s*(?:\(at\)|\[at\]|\{at\}|\(arobase\)|\[arobase\])\s*([a-z0-9.-]+\.[a-z]{2,63})/gi;
   for (const match of text.matchAll(simple)) {
     const [, local, domain] = match;
     if (local !== undefined && domain !== undefined) {

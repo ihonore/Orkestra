@@ -95,6 +95,19 @@ const ROLE_LOCAL_PARTS = new Set([
   'privacy',
   'legal',
   'abuse',
+  // French front desks: a salon's bonjour@ or rdv@ is its general inbox, not
+  // a named person, and ranking it above contact@ would be wrong both ways.
+  'bonjour',
+  'accueil',
+  'rdv',
+  'rendezvous',
+  'rendez-vous',
+  'reservation',
+  'reservations',
+  'salon',
+  'institut',
+  'boutique',
+  'infos',
 ]);
 
 const FREE_PROVIDERS = new Set([
@@ -116,6 +129,24 @@ const FREE_PROVIDERS = new Set([
   'mail.com',
   'zoho.com',
   'yandex.com',
+  // France: the big ISPs' mailboxes, which independents use as their business
+  // address. Not free mail by price, but personal mailboxes all the same.
+  'orange.fr',
+  'wanadoo.fr',
+  'free.fr',
+  'sfr.fr',
+  'neuf.fr',
+  'laposte.net',
+  'bbox.fr',
+  'aliceadsl.fr',
+  'numericable.fr',
+  'club-internet.fr',
+  'hotmail.fr',
+  'live.fr',
+  'outlook.fr',
+  'msn.fr',
+  'yahoo.fr',
+  'gmx.fr',
 ]);
 
 /**
@@ -138,6 +169,25 @@ const VENDOR_DOMAINS: readonly RegExp[] = [
   /(^|\.)wordpress\.com$/i,
   /(^|\.)shopify\.com$/i,
   /(^|\.)sentry\.wixpress\.com$/i,
+  // Hosts, site builders and directories French sites name in their mentions
+  // légales: the address is the host's, not the business's.
+  /(^|\.)ovh\.(?:net|com|fr)$/i,
+  /(^|\.)ovhcloud\.com$/i,
+  /(^|\.)ionos\.(?:fr|com|de)$/i,
+  /(^|\.)o2switch\.fr$/i,
+  /(^|\.)hostinger\.[a-z.]+$/i,
+  /(^|\.)jimdo\.com$/i,
+  /(^|\.)wix\.com$/i,
+  /(^|\.)pagesjaunes\.fr$/i,
+  /(^|\.)solocal\.com$/i,
+  // Booking platforms: support@planity.com in a salon's footer is Planity's.
+  /(^|\.)planity\.com$/i,
+  /(^|\.)treatwell\.[a-z.]+$/i,
+  /(^|\.)fresha\.com$/i,
+  /(^|\.)booksy\.com$/i,
+  // Consumer mediators, which French sites must name: the mediator's address.
+  /(^|\.)(?:cm2c\.net|medicys\.fr|anm-conso\.com)$/i,
+  /(^|\.)[a-z0-9-]*mediat(?:eur|ion)[a-z0-9-]*\.(?:fr|eu)$/i,
 ];
 
 /** Placeholder domains from templates and documentation. */
@@ -224,6 +274,14 @@ const NON_CONTACT_LOCAL_RE = new RegExp(
     '\\.legal$',
     '^compliance',
     '^(?:abuse|bounces?|bugreport|dpo|hostmaster|postmaster|webmaster)$',
+    // French: data protection, "do not reply", unsubscribe.
+    '^rgpd',
+    '^cnil',
+    'donnees[-_.]?personnelles',
+    'protection[-_.]?(?:des[-_.]?)?donnees',
+    'ne[-_.]?pas[-_.]?repondre',
+    'desinscription',
+    'desabonnement',
   ].join('|'),
 );
 
@@ -275,6 +333,10 @@ const GOVERNMENT_PATTERNS: readonly RegExp[] = [
   // enrichment.websiteEmails.validation.blockedDomains.
   /(^|\.)(?:muni\.org|anchorageak\.org|ahfc\.us)$/i,
   /(^|\.)usps\.com$/i,
+  // France: the state, and town halls on their usual names.
+  /(^|\.)gouv\.fr$/i,
+  /^(?:mairie|ville)-[a-z0-9-]+\.fr$/i,
+  /(^|\.)paris\.fr$/i,
 ];
 
 /** Offices that exist only in government, wherever the address is hosted. */
@@ -296,6 +358,9 @@ const EDUCATION_PATTERNS: readonly RegExp[] = [
   /\.edu\.[a-z]{2}$/i,
   /(^|\.)ac\.[a-z]{2}$/i,
   /(^|\.)sch\.[a-z]{2}$/i,
+  // France: the académies (ac-paris.fr) and universities (univ-paris1.fr).
+  /(^|\.)ac-[a-z-]+\.fr$/i,
+  /(^|\.)univ-[a-z0-9-]+\.fr$/i,
 ];
 
 /**
