@@ -103,6 +103,7 @@ export class BrowserPool {
   #contexts = new Set<BrowserContext>();
   #uses = new WeakMap<BrowserContext, number>();
   #closing = false;
+  #starting: Promise<void> | null = null;
 
   constructor(private readonly options: BrowserPoolOptions = {}) {}
 
@@ -114,9 +115,24 @@ export class BrowserPool {
     return this.#contexts.size;
   }
 
+  /**
+   * Launch the browser, once.
+   *
+   * Every worker leases its first page at the same moment, and each one finds
+   * no browser yet. Without the shared launch below, each started its own:
+   * four workers, four Chromiums, of which the pool kept only the last. The
+   * others were never closed, and their pipes kept the process alive after
+   * the run — seen live as a finished scrape still "running" hours later.
+   */
   async start(): Promise<void> {
     if (this.#browser !== null) return;
+    this.#starting ??= this.#launch().finally(() => {
+      this.#starting = null;
+    });
+    await this.#starting;
+  }
 
+  async #launch(): Promise<void> {
     const launch: LaunchOptions = {
       headless: this.options.headless ?? true,
       args: [
@@ -237,6 +253,9 @@ export class BrowserPool {
   /** Close every context and the browser. Safe to call more than once. */
   async close(): Promise<void> {
     this.#closing = true;
+    // A browser still starting would otherwise come up after the close, open
+    // and unowned.
+    if (this.#starting !== null) await this.#starting.catch(() => undefined);
     for (const context of [...this.#contexts]) {
       try {
         await context.close();
