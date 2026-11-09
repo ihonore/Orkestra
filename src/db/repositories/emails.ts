@@ -384,6 +384,29 @@ export class EmailsRepository extends BaseRepository {
       .run([kind, value.toLowerCase(), reason, now]);
   }
 
+  /** Every opt-out, newest first. */
+  listSuppressions(): {
+    kind: string;
+    value: string;
+    reason: string | null;
+    created_at: number;
+  }[] {
+    return this.driver
+      .prepare<{ kind: string; value: string; reason: string | null; created_at: number }>(
+        `SELECT kind, value, reason, created_at FROM suppressions ORDER BY created_at DESC, id DESC`,
+      )
+      .all();
+  }
+
+  /** Undo an opt-out entered by mistake. Returns whether one was removed. */
+  removeSuppression(kind: 'email' | 'domain' | 'phone' | 'cid', value: string): boolean {
+    return (
+      this.driver
+        .prepare(`DELETE FROM suppressions WHERE kind = ? AND value = ?`)
+        .run([kind, value.toLowerCase()]).changes > 0
+    );
+  }
+
   /** Counts for the enrichment summary. */
   stats(): Record<string, number> {
     const row = this.driver

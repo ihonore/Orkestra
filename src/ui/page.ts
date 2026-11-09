@@ -464,6 +464,16 @@ export const PAGE = String.raw`<!doctype html>
         <span class="label" id="page-of"></span>
         <button class="chip" id="next">Next</button>
       </div>
+      <div class="label" style="margin:30px 0 11px">Opt-outs — never contacted again, left out of every export</div>
+      <div class="tools">
+        <input type="text" id="opt-value" placeholder="email, phone number or website" style="width:300px">
+        <button class="chip" id="opt-add">Opt out</button>
+        <span class="muted" id="opt-note"></span>
+      </div>
+      <div class="wrap"><table>
+        <thead><tr><th>Added</th><th>What</th><th>Opted out</th></tr></thead>
+        <tbody id="opt-body"></tbody>
+      </table></div>
     </section>
 
     <section id="issues">
@@ -844,6 +854,7 @@ const LAYOUTS = {
   business: { label: 'One row per business', entity: 'leads-by-business', tab: 'Leads by business' },
   email: { label: 'One row per email', entity: 'leads-with-email', tab: 'Leads' },
   all: { label: 'Every lead, with or without email', entity: 'leads-flat', tab: 'Leads' },
+  prospects: { label: 'One row per qualified lead (French)', entity: 'prospects', tab: 'Prospects' },
 };
 let sheetsCheck = null;
 let sheetsNote = null;
@@ -869,6 +880,7 @@ function sheetsBody(busy) {
     '</select><span class="muted">' + esc(sheets.layout === 'business'
       ? 'best address first, the rest in "other emails"; sent once its website has been checked'
       : sheets.layout === 'email' ? 'a business with three addresses fills three rows'
+      : sheets.layout === 'prospects' ? 'wanted leads only, phone-only ones included, with Priorité; rows are only ever added'
       : 'also businesses with no email yet, which appear again once one is found') + '</span>' +
     '</div><div class="opts"><label>Key file</label>' + key +
     '<label class="chip">' + (sheets.keyFound ? 'Replace key' : 'Choose key file') +
@@ -1425,7 +1437,27 @@ async function loadPlate() {
 let page = 0, statesLoaded = false;
 const LIMIT = 100;
 
+async function loadOptOuts() {
+  const rows = await get('/api/suppressions');
+  $('#opt-body').innerHTML = rows.length ? rows.map((r) =>
+    '<tr><td class="muted">' + esc(new Date(r.created_at).toISOString().slice(0, 10)) + '</td>' +
+    '<td class="muted">' + esc(r.kind) + '</td><td>' + esc(r.value) + '</td></tr>').join('')
+    : '<tr><td colspan="3" class="muted">No opt-outs yet.</td></tr>';
+}
+
+async function addOptOut() {
+  const value = $('#opt-value').value.trim();
+  if (!value) return;
+  const res = await fetch('/api/suppressions', {
+    method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ value }),
+  });
+  const body = await res.json();
+  $('#opt-note').textContent = res.ok ? 'Opted out: ' + body.value : body.error;
+  if (res.ok) { $('#opt-value').value = ''; loadOptOuts(); }
+}
+
 async function loadLeads() {
+  loadOptOuts();
   const p = new URLSearchParams({
     search: $('#q').value, state: $('#state').value,
     hasEmail: $('#f-email').getAttribute('aria-pressed') === 'true' ? '1' : '0',
@@ -1472,6 +1504,8 @@ $('#state').addEventListener('change', () => { page = 0; loadLeads(); });
 }));
 $('#prev').addEventListener('click', () => { if (page > 0) { page--; loadLeads(); } });
 $('#next').addEventListener('click', () => { page++; loadLeads(); });
+$('#opt-add').addEventListener('click', addOptOut);
+$('#opt-value').addEventListener('keydown', (e) => { if (e.key === 'Enter') addOptOut(); });
 
 // ── Issues ─────────────────────────────────────────────────────────────
 async function loadIssues() {

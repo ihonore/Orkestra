@@ -31,6 +31,27 @@ export interface RecordSchema {
 const sqlList = (words: readonly string[]): string => `(${words.map((w) => `'${w}'`).join(', ')})`;
 
 /**
+ * An address no one may be written to: opted out itself, or its whole
+ * domain. `e` is the alias of the `emails` row.
+ *
+ * Applied in the export rather than only when crawling: someone who opts out
+ * after their address was found must still drop out of every export after.
+ */
+const emailNotSuppressed = (e: string): string =>
+  `NOT EXISTS (SELECT 1 FROM suppressions sp
+                WHERE (sp.kind = 'email' AND sp.value = ${e}.address)
+                   OR (sp.kind = 'domain' AND sp.value = ${e}.email_domain))`;
+
+/**
+ * A business that asked not to be contacted, by phone, listing or website.
+ * Needs `b` (businesses) and `d` (its domain) in scope.
+ */
+const BUSINESS_NOT_SUPPRESSED = `NOT EXISTS (SELECT 1 FROM suppressions sp
+      WHERE (sp.kind = 'phone' AND sp.value = b.phone_e164)
+         OR (sp.kind = 'cid' AND sp.value = b.cid)
+         OR (sp.kind = 'domain' AND sp.value = d.domain))`;
+
+/**
  * Departments that reach a person, but not one who buys: a poor first choice
  * for a business, so they rank last. Mailboxes nobody answers (privacy@,
  * noreply@) never get this far: the email rules reject them outright.
@@ -135,7 +156,7 @@ function leadsFlatSql(where: string, orderBy: string): string {
         JOIN emails e ON e.id = be.email_id
        -- off_site: the site's builder's or a vendor's address, not the
        -- business's (support@overfuel.com on a dealer's site). See rules.ts.
-       WHERE e.is_junk = 0 AND be.off_site = 0
+       WHERE e.is_junk = 0 AND be.off_site = 0 AND ${emailNotSuppressed('e')}
     ) be ON be.business_id = b.id
     LEFT JOIN domains d ON d.id = b.domain_id
     LEFT JOIN business_sightings s ON s.id = (
@@ -143,7 +164,7 @@ function leadsFlatSql(where: string, orderBy: string): string {
     )
     LEFT JOIN cities seed_city ON seed_city.id = s.seed_city_id
     LEFT JOIN categories seed_cat ON seed_cat.id = s.seed_category_id
-    WHERE ${where}
+    WHERE ${where} AND ${BUSINESS_NOT_SUPPRESSED}
     ORDER BY ${orderBy}
     LIMIT :limit`;
 }
@@ -179,6 +200,40 @@ export const LEADS_WITH_EMAIL_VIEW: RecordSchema = {
 };
 
 /**
+ * Every usable address of every business, ranked best first (rank 1), with
+ * the business's first link and address count. Shared by the by-business
+ * views so they cannot disagree about which address is best.
+ */
+const RANKED_EMAILS = `links AS (
+      SELECT be.rowid AS link_id, be.business_id, be.confidence,
+             e.address, e.is_role, e.is_free, e.email_domain,
+             e.local_part IN ${sqlList(LOW_VALUE_LOCAL_PARTS)} AS low_value
+        FROM business_emails be
+        JOIN emails e ON e.id = be.email_id
+       -- off_site: the site's builder's or a vendor's address, not the
+       -- business's (support@overfuel.com on a dealer's site). See rules.ts.
+       WHERE e.is_junk = 0 AND be.off_site = 0 AND ${emailNotSuppressed('e')}
+    ),
+    ranked AS (
+      SELECT l.*,
+             ROW_NUMBER() OVER (
+               PARTITION BY l.business_id
+               ORDER BY l.low_value ASC,
+                        (l.email_domain = d.domain AND l.is_role = 0 AND l.is_free = 0) DESC,
+                        (l.email_domain = d.domain) DESC,
+                        l.is_free ASC,
+                        l.is_role ASC,
+                        l.confidence DESC,
+                        l.link_id ASC
+             ) AS rank,
+             MIN(l.link_id) OVER (PARTITION BY l.business_id) AS first_link,
+             COUNT(*) OVER (PARTITION BY l.business_id) AS email_count
+        FROM links l
+        JOIN businesses b ON b.id = l.business_id
+        LEFT JOIN domains d ON d.id = b.domain_id
+    )`;
+
+/**
  * One row per business that has an email: its best address in `email`, the
  * rest in `other_emails`. What the team's sheet uses by default — a business
  * with five addresses used to fill five rows.
@@ -200,35 +255,9 @@ export const LEADS_WITH_EMAIL_VIEW: RecordSchema = {
  * per-email exports have it. The one way to send a business with only some of
  * its addresses is a crawl stopped mid-way, which commits what it found so far.
  */
+
 const LEADS_BY_BUSINESS_SQL = `
-    WITH links AS (
-      SELECT be.rowid AS link_id, be.business_id, be.confidence,
-             e.address, e.is_role, e.is_free, e.email_domain,
-             e.local_part IN ${sqlList(LOW_VALUE_LOCAL_PARTS)} AS low_value
-        FROM business_emails be
-        JOIN emails e ON e.id = be.email_id
-       -- off_site: the site's builder's or a vendor's address, not the
-       -- business's (support@overfuel.com on a dealer's site). See rules.ts.
-       WHERE e.is_junk = 0 AND be.off_site = 0
-    ),
-    ranked AS (
-      SELECT l.*,
-             ROW_NUMBER() OVER (
-               PARTITION BY l.business_id
-               ORDER BY l.low_value ASC,
-                        (l.email_domain = d.domain AND l.is_role = 0 AND l.is_free = 0) DESC,
-                        (l.email_domain = d.domain) DESC,
-                        l.is_free ASC,
-                        l.is_role ASC,
-                        l.confidence DESC,
-                        l.link_id ASC
-             ) AS rank,
-             MIN(l.link_id) OVER (PARTITION BY l.business_id) AS first_link,
-             COUNT(*) OVER (PARTITION BY l.business_id) AS email_count
-        FROM links l
-        JOIN businesses b ON b.id = l.business_id
-        LEFT JOIN domains d ON d.id = b.domain_id
-    ),
+    WITH ${RANKED_EMAILS},
     best AS (
       SELECT * FROM ranked WHERE rank = 1 AND first_link > :lastSubId
     )
@@ -269,6 +298,7 @@ const LEADS_BY_BUSINESS_SQL = `
     )
     LEFT JOIN cities seed_city ON seed_city.id = s.seed_city_id
     LEFT JOIN categories seed_cat ON seed_cat.id = s.seed_category_id
+    WHERE ${BUSINESS_NOT_SUPPRESSED}
     ORDER BY best.first_link
     LIMIT :limit`;
 
@@ -300,13 +330,147 @@ export const LEADS_BY_BUSINESS: RecordSchema = {
   sql: LEADS_BY_BUSINESS_SQL,
 };
 
+/**
+ * A French number as people write it, "01 42 33 44 55"; any other number as
+ * stored. `p` is an E.164 column.
+ */
+const nationalPhone = (p: string): string =>
+  `CASE WHEN ${p} LIKE '+33_________' AND LENGTH(${p}) = 12
+        THEN '0' || SUBSTR(${p}, 4, 1) || ' ' || SUBSTR(${p}, 5, 2) || ' ' || SUBSTR(${p}, 7, 2)
+             || ' ' || SUBSTR(${p}, 9, 2) || ' ' || SUBSTR(${p}, 11, 2)
+        ELSE ${p} END`;
+
+/**
+ * One row per lead, for a campaign that qualifies its leads — Gobadiz's
+ * sheet, with French headers.
+ *
+ * ## Which rows, and when
+ *
+ * A lead is sent once qualification has numbered it (`lead_seq`): wanted, and
+ * its email search over. The cursor is that number, so every lead goes out
+ * exactly once, in the order it became ready, **with or without an email** —
+ * a nail technician with only an Instagram is reachable by phone and by DM,
+ * and is often the best lead there is. A lead excluded or opted out after it
+ * was numbered is held back from then on.
+ *
+ * ## Priorité
+ *
+ * Who to call first, by what a salon already has:
+ *  - A: no online booking yet, and an Instagram profile or a mobile number —
+ *    an independent, reachable directly, with no tool to switch from.
+ *  - B: no online booking yet.
+ *  - C: already books through Planity, Treatwell, its own site or similar.
+ *
+ * Review counts would sharpen this, but Google shows none on French listings.
+ */
+const PROSPECTS_SQL = `
+    WITH ${RANKED_EMAILS},
+    lead AS (
+      SELECT b.*,
+             d.domain AS site_domain, d.is_social AS site_is_social,
+             COALESCE(b.instagram_url, d.instagram_url) AS instagram,
+             REPLACE(COALESCE(b.booking_provider, d.booking_provider), 'own site', 'Site du salon')
+               AS booking,
+             MAX(b.by_appointment, COALESCE(d.by_appointment, 0)) AS appointment_only
+        FROM businesses b
+        LEFT JOIN domains d ON d.id = b.domain_id
+       WHERE b.lead_seq > :lastId
+         AND b.exclusion_reason IS NULL
+         AND ${BUSINESS_NOT_SUPPRESSED}
+    )
+    SELECT
+      l.lead_seq                                            AS id,
+      CASE WHEN l.booking IS NOT NULL THEN 'C'
+           WHEN l.instagram IS NOT NULL
+             OR l.phone_e164 LIKE '+336%' OR l.phone_e164 LIKE '+337%' THEN 'A'
+           ELSE 'B' END                                     AS "Priorité",
+      l.specialty                                           AS "Spécialité",
+      l.name                                                AS "Nom",
+      COALESCE(l.category_label, l.category_primary)        AS "Catégorie",
+      l.city                                                AS "Ville",
+      l.postal_code                                         AS "Code postal",
+      l.street                                              AS "Adresse",
+      COALESCE(${nationalPhone('l.phone_e164')}, l.phone_raw) AS "Téléphone",
+      CASE WHEN l.phone_e164 LIKE '+336%' OR l.phone_e164 LIKE '+337%'
+           THEN 'oui' ELSE NULL END                         AS "Portable",
+      best.address                                          AS "Email",
+      (SELECT GROUP_CONCAT(address, ', ')
+         FROM (SELECT r.address FROM ranked r
+                WHERE r.business_id = l.id AND r.rank > 1
+                ORDER BY r.rank))                           AS "Autres emails",
+      l.instagram                                           AS "Instagram",
+      CASE WHEN l.site_is_social = 1 THEN NULL ELSE l.website_url END AS "Site web",
+      l.booking                                             AS "Réservation en ligne",
+      CASE WHEN l.appointment_only = 1 THEN 'oui' ELSE NULL END AS "Sur RDV",
+      l.rating                                              AS "Note",
+      seed_cat.name || ' · ' || seed_city.city              AS "Trouvé via",
+      l.gmaps_url                                           AS "Google Maps",
+      l.first_seen_at                                       AS "Ajouté le",
+      NULL                                                  AS "Statut",
+      NULL                                                  AS "Notes"
+    FROM lead l
+    LEFT JOIN ranked best ON best.business_id = l.id AND best.rank = 1
+    LEFT JOIN business_sightings s ON s.id = (
+      SELECT id FROM business_sightings WHERE business_id = l.id ORDER BY id LIMIT 1
+    )
+    LEFT JOIN cities seed_city ON seed_city.id = s.seed_city_id
+    LEFT JOIN categories seed_cat ON seed_cat.id = s.seed_category_id
+    ORDER BY l.lead_seq
+    LIMIT :limit`;
+
+export const PROSPECTS: RecordSchema = {
+  entity: 'prospects',
+  fields: [
+    { name: 'Priorité', kind: 'text', description: 'A, B or C: who to call first' },
+    { name: 'Spécialité', kind: 'text' },
+    { name: 'Nom', kind: 'text' },
+    { name: 'Catégorie', kind: 'text' },
+    { name: 'Ville', kind: 'text', description: 'with the arrondissement: Paris 11e' },
+    { name: 'Code postal', kind: 'digits' },
+    { name: 'Adresse', kind: 'text' },
+    { name: 'Téléphone', kind: 'text', description: '01 42 33 44 55' },
+    { name: 'Portable', kind: 'text' },
+    { name: 'Email', kind: 'text', description: 'the best address' },
+    { name: 'Autres emails', kind: 'text' },
+    { name: 'Instagram', kind: 'text' },
+    { name: 'Site web', kind: 'text' },
+    { name: 'Réservation en ligne', kind: 'text', description: 'Planity, Treatwell…' },
+    { name: 'Sur RDV', kind: 'text' },
+    { name: 'Note', kind: 'number' },
+    { name: 'Trouvé via', kind: 'text', description: 'search term · area' },
+    { name: 'Google Maps', kind: 'text' },
+    { name: 'Ajouté le', kind: 'timestamp' },
+    { name: 'Statut', kind: 'text', description: 'left blank for the team' },
+    { name: 'Notes', kind: 'text', description: 'left blank for the team' },
+  ],
+  sql: PROSPECTS_SQL,
+};
+
 /** How the team's sheet lists leads, and the view each layout sends. */
-export type SheetLayout = 'business' | 'email' | 'all';
+export type SheetLayout = 'business' | 'email' | 'all' | 'prospects';
 export const SHEET_LAYOUT_ENTITY: Record<SheetLayout, string> = {
   business: 'leads-by-business',
   email: 'leads-with-email',
   all: 'leads-flat',
+  prospects: 'prospects',
 };
+
+/**
+ * The tab a view is sent to. Each layout has its own columns, so its own
+ * tab: one layout appended under another's header would scramble both.
+ */
+export function sheetTabFor(
+  settings: {
+    readonly sheetName: string;
+    readonly businessSheetName: string;
+    readonly prospectsSheetName: string;
+  },
+  entity: string,
+): string {
+  if (entity === LEADS_BY_BUSINESS.entity) return settings.businessSheetName;
+  if (entity === PROSPECTS.entity) return settings.prospectsSheetName;
+  return settings.sheetName;
+}
 
 export const BUSINESSES: RecordSchema = {
   entity: 'businesses',
@@ -380,6 +544,7 @@ export const VIEWS: Record<string, RecordSchema> = {
   'leads-flat': LEADS_FLAT,
   'leads-with-email': LEADS_WITH_EMAIL_VIEW,
   'leads-by-business': LEADS_BY_BUSINESS,
+  prospects: PROSPECTS,
   businesses: BUSINESSES,
   emails: EMAILS,
 };

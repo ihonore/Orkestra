@@ -28,6 +28,7 @@ import { runInit } from './commands/init.js';
 import { runPlan } from './commands/plan.js';
 import { runQueue } from './commands/queue.js';
 import { runQualify } from './commands/qualify.js';
+import { runSuppressAdd, runSuppressList, runSuppressRemove } from './commands/suppress.js';
 import { runSeedsLoad, runSeedsSave } from './commands/seeds.js';
 import { runRun } from './commands/run.js';
 import { runJobsList, runJobsRetry, runStatus } from './commands/status.js';
@@ -390,6 +391,38 @@ export function buildProgram(): Command {
       runQualify({ config: configFrom(program), json: options.json });
     });
 
+  const suppress = program
+    .command('suppress')
+    .description('the opt-out list: who must never be contacted again');
+  suppress
+    .command('add')
+    .description('opt out an email, phone number or website (several at once is fine)')
+    .argument('<values...>', 'e.g. contact@monsalon.fr "06 12 34 56 78" monsalon.fr')
+    .option('-r, --reason <text>', 'why, for the record')
+    .option('--json', 'emit machine-readable output', false)
+    .action((values: string[], options: { reason?: string; json: boolean }) => {
+      runSuppressAdd({
+        config: configFrom(program),
+        values,
+        ...(options.reason !== undefined && { reason: options.reason }),
+        json: options.json,
+      });
+    });
+  suppress
+    .command('list')
+    .description('show every opt-out, newest first')
+    .option('--json', 'emit machine-readable output', false)
+    .action((options: { json: boolean }) => {
+      runSuppressList({ config: configFrom(program), json: options.json });
+    });
+  suppress
+    .command('remove')
+    .description('undo an opt-out entered by mistake')
+    .argument('<value>', 'the email, phone number or website')
+    .action((value: string) => {
+      runSuppressRemove({ config: configFrom(program), value });
+    });
+
   program
     .command('status')
     .description('show queue progress, throughput and ETA')
@@ -509,7 +542,14 @@ export function buildProgram(): Command {
     .description('export to CSV, resuming from the last position')
     .addOption(
       new Option('-e, --entity <name>', 'what to export')
-        .choices(['leads-flat', 'leads-with-email', 'leads-by-business', 'businesses', 'emails'])
+        .choices([
+          'leads-flat',
+          'leads-with-email',
+          'leads-by-business',
+          'prospects',
+          'businesses',
+          'emails',
+        ])
         .default('leads-flat'),
     )
     .option('-o, --out-dir <path>', 'output directory (default: dataDir/exports)')
@@ -560,7 +600,14 @@ export function buildProgram(): Command {
       new Option(
         '-e, --entity <name>',
         'what to export (default: exporters.sheets.layout)',
-      ).choices(['leads-flat', 'leads-with-email', 'leads-by-business', 'businesses', 'emails']),
+      ).choices([
+        'leads-flat',
+        'leads-with-email',
+        'leads-by-business',
+        'prospects',
+        'businesses',
+        'emails',
+      ]),
     )
     .option('-s, --spreadsheet-id <id>', 'from the sheet URL (overrides config)')
     .option('-t, --tab <name>', 'sheet tab name')

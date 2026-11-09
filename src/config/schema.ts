@@ -369,13 +369,22 @@ export const ExportersSchema = z
          * email, its best address first and the rest in one cell. `email`: one
          * row per address. `all`: one row per address plus businesses with none.
          */
-        layout: z.enum(['business', 'email', 'all']).default('business'),
+        layout: z.enum(['business', 'email', 'all', 'prospects']).default('business'),
         /**
          * The tab for the `business` layout. Separate from `sheetName` because
          * its columns differ: appending one layout under the other's header
          * would scramble both.
          */
         businessSheetName: z.string().min(1).default('Leads by business'),
+        /** The tab for the `prospects` layout: one row per qualified lead, French headers. */
+        prospectsSheetName: z.string().min(1).default('Prospects'),
+        /**
+         * Whether a re-scrape may clear the tab and send everything again.
+         * Off for a sheet the team writes in — call notes, a status column —
+         * since a rebuild re-sends rows in a new order and their notes would
+         * no longer sit beside the right lead. New leads are still appended.
+         */
+        rebuildOnRescrape: z.boolean().default(true),
         /**
          * Path to a service-account JSON key.
          *

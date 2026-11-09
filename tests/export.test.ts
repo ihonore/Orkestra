@@ -258,6 +258,7 @@ describe('view schemas', () => {
       'leads-by-business',
       'leads-flat',
       'leads-with-email',
+      'prospects',
     ]);
   });
 

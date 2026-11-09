@@ -29,6 +29,7 @@ import {
   type ExportRow,
   type RecordSchema,
   SHEET_LAYOUT_ENTITY,
+  sheetTabFor,
   sharedLeadEntity,
   startingCursor,
 } from '../../views/index.js';
@@ -257,10 +258,8 @@ export async function runExportSheets(options: ExportSheetsOptions): Promise<voi
     });
   }
 
-  // The by-business layout has its own columns, so its own tab.
-  const sheetName =
-    options.sheetName ??
-    (entity === 'leads-by-business' ? settings.businessSheetName : settings.sheetName);
+  // Each layout has its own columns, so its own tab.
+  const sheetName = options.sheetName ?? sheetTabFor(settings, entity);
   const driver = openDatabaseFromConfig(options.config);
   qualifyIfEnabled(driver, options.config);
   const cursors = new ExportsRepository(driver);
@@ -268,7 +267,11 @@ export async function runExportSheets(options: ExportSheetsOptions): Promise<voi
   try {
     // A pending rebuild goes first whichever route got here. An ordinary send
     // would append every row beneath the stale ones it is meant to replace.
-    const rebuild = options.rebuild === true || pendingSheetRebuild(driver) === entity;
+    // A sheet the team writes in is never rebuilt behind its back: their
+    // notes would end up beside the wrong rows. `--rebuild` still can.
+    const rebuild =
+      options.rebuild === true ||
+      (settings.rebuildOnRescrape && pendingSheetRebuild(driver) === entity);
     const fromScratch = options.full === true || rebuild;
     const toCursor = (row: { last_id: number; last_sub_id: number } | null) =>
       row === null ? null : { lastId: row.last_id, lastSubId: row.last_sub_id };

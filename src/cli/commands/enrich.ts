@@ -265,6 +265,10 @@ export async function runEnrichEmails(options: EnrichCommandOptions): Promise<vo
     const workerCount = Math.max(1, options.workers ?? config.runtime.httpWorkers);
     await Promise.all(Array.from({ length: workerCount }, (_, i) => worker(i)));
 
+    // The leads whose sites this run crawled are ready now: number them, so
+    // autopilot sees them waiting for the sheet without another pass.
+    qualifyIfEnabled(driver, config);
+
     const stats = emails.stats();
     const junk = emails.junkBreakdown();
 

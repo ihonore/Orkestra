@@ -41,7 +41,10 @@ export async function checkSheets(config: ResolvedConfig): Promise<SheetsCheck[]
 
   const results: SheetsCheck[] = [];
   const { SheetsExporter, MAX_CELLS_PER_SPREADSHEET } = await import('./sheets.js');
-  const { VIEWS } = await import('../views/index.js');
+  const { VIEWS, SHEET_LAYOUT_ENTITY, sheetTabFor } = await import('../views/index.js');
+  // The tab the configured layout actually writes, with that layout's columns.
+  const entity = SHEET_LAYOUT_ENTITY[settings.layout];
+  const tab = sheetTabFor(settings, entity);
 
   const credentials =
     settings.credentialsFile !== undefined
@@ -91,18 +94,18 @@ export async function checkSheets(config: ResolvedConfig): Promise<SheetsCheck[]
   try {
     const exporter = new SheetsExporter({
       spreadsheetId: settings.spreadsheetId,
-      sheetName: settings.sheetName,
+      sheetName: tab,
       createIfMissing: settings.createIfMissing,
       ...(credentials !== undefined && { credentialsFile: credentials }),
     });
 
-    const room = await exporter.prepare(VIEWS['leads-flat']!);
+    const room = await exporter.prepare(VIEWS[entity]!);
     const usedPercent = ((room.cellsUsed / MAX_CELLS_PER_SPREADSHEET) * 100).toFixed(1);
 
     results.push({
       name: 'Sheets access',
       status: 'ok',
-      detail: `"${settings.sheetName}" is writable`,
+      detail: `"${tab}" is writable`,
     });
     results.push({
       name: 'Sheets capacity',

@@ -36,10 +36,14 @@ import type { SeedKind } from '../db/repositories/seed-jobs.js';
 import { errorMessage, isAppError } from '../core/errors/taxonomy.js';
 import type { Logger } from '../core/logging/logger.js';
 import { saveSeedFiles } from '../seeds/bundled.js';
+import { EmailsRepository } from '../db/repositories/emails.js';
+import { parseOptOut } from '../qualify/opt-out.js';
 import { MetaRepository } from '../db/repositories/meta.js';
 import { ExportsRepository } from '../db/repositories/exports.js';
 import {
   SHEET_LAYOUT_ENTITY,
+  sheetTabFor,
+  type SheetLayout,
   VIEWS,
   countRemaining,
   sharedLeadEntity,
@@ -89,6 +93,8 @@ function autopilotSnapshot(
   driver: ReturnType<typeof openDatabaseFromConfig>,
   entity: string,
   spreadsheetId: string | null,
+  /** Whether a pending rebuild may run; off for a sheet the team writes in. */
+  rebuildOnRescrape = true,
 ): Snapshot {
   const count = (sql: string, params: readonly (string | number)[] = []): number =>
     driver.prepare<{ n: number }>(sql).get(params)?.n ?? 0;
@@ -113,7 +119,8 @@ function autopilotSnapshot(
 
   return {
     rescrape: rescrapeProgress(driver),
-    rebuildPending: spreadsheetId !== null && pendingSheetRebuild(driver) === entity,
+    rebuildPending:
+      spreadsheetId !== null && rebuildOnRescrape && pendingSheetRebuild(driver) === entity,
     // Exactly what a worker could claim: the same conditions as the claim.
     searchesQueued: count(
       `SELECT COUNT(*) AS n FROM jobs
@@ -137,11 +144,27 @@ const SHEETS_KEYS = new Set([
   'exporters.sheets.spreadsheetId',
   'exporters.sheets.sheetName',
   'exporters.sheets.businessSheetName',
+  'exporters.sheets.prospectsSheetName',
   'exporters.sheets.layout',
   'exporters.sheets.credentialsFile',
 ]);
 
-const SHEET_LAYOUTS = new Set(['business', 'email', 'all']);
+const SHEET_LAYOUTS = new Set(['business', 'email', 'all', 'prospects']);
+
+/** The settings key holding the tab name of a layout. */
+function tabKeyFor(layout: SheetLayout): string {
+  if (layout === 'business') return 'exporters.sheets.businessSheetName';
+  if (layout === 'prospects') return 'exporters.sheets.prospectsSheetName';
+  return 'exporters.sheets.sheetName';
+}
+
+/** A layout's usual tab, offered when none has been typed. */
+const DEFAULT_TABS: Record<SheetLayout, string> = {
+  business: 'Leads by business',
+  email: 'Leads',
+  all: 'Leads',
+  prospects: 'Prospects',
+};
 
 /**
  * Commands the dashboard may start, and how its form fields map to flags.
@@ -610,6 +633,7 @@ export function startUiServer(options: UiServerOptions): Promise<RunningServer> 
                 driver,
                 SHEET_LAYOUT_ENTITY[sheets.layout],
                 sheets.spreadsheetId ?? null,
+                sheets.rebuildOnRescrape,
               );
             } finally {
               driver.close();
@@ -1018,9 +1042,8 @@ export function startUiServer(options: UiServerOptions): Promise<RunningServer> 
           view: {
             spreadsheetId: settings.spreadsheetId ?? null,
             layout: settings.layout,
-            // The tab the chosen layout writes to: by-business has its own.
-            sheetName:
-              settings.layout === 'business' ? settings.businessSheetName : settings.sheetName,
+            // The tab the chosen layout writes to: each has its own.
+            sheetName: sheetTabFor(settings, SHEET_LAYOUT_ENTITY[settings.layout]),
             credentialsFile: settings.credentialsFile ?? null,
             keyFound: keyFile !== undefined && fs.existsSync(keyFile),
             clientEmail: keyFile !== undefined ? keyEmail(keyFile) : null,
@@ -1043,7 +1066,7 @@ export function startUiServer(options: UiServerOptions): Promise<RunningServer> 
           const input = body as { spreadsheet?: unknown; sheetName?: unknown; layout?: unknown };
           const layout =
             typeof input.layout === 'string' && SHEET_LAYOUTS.has(input.layout)
-              ? (input.layout as 'business' | 'email' | 'all')
+              ? (input.layout as SheetLayout)
               : 'business';
           const spreadsheetId = parseSpreadsheetId(input.spreadsheet);
           if (spreadsheetId === null) {
@@ -1053,9 +1076,7 @@ export function startUiServer(options: UiServerOptions): Promise<RunningServer> 
             });
             return;
           }
-          const sheetName = parseSheetName(
-            input.sheetName ?? (layout === 'business' ? 'Leads by business' : 'Leads'),
-          );
+          const sheetName = parseSheetName(input.sheetName ?? DEFAULT_TABS[layout]);
           if (sheetName === null) {
             json(res, 400, { error: 'The tab name must be 1 to 100 characters.' });
             return;
@@ -1065,9 +1086,7 @@ export function startUiServer(options: UiServerOptions): Promise<RunningServer> 
             {
               'exporters.sheets.spreadsheetId': spreadsheetId,
               'exporters.sheets.layout': layout,
-              [layout === 'business'
-                ? 'exporters.sheets.businessSheetName'
-                : 'exporters.sheets.sheetName']: sheetName,
+              [tabKeyFor(layout)]: sheetName,
             },
             SHEETS_KEYS,
           );
@@ -1138,6 +1157,48 @@ export function startUiServer(options: UiServerOptions): Promise<RunningServer> 
           .catch((error: unknown) => {
             json(res, 500, { error: errorMessage(error) });
           });
+        return;
+      }
+
+      // The opt-out list. Reading it is open to a view-only dashboard; adding
+      // to it needs controls, like every other write.
+      if (url.pathname === '/api/suppressions' && req.method === 'GET') {
+        json(
+          res,
+          200,
+          withDb((d) => new EmailsRepository(d).listSuppressions().slice(0, 200)),
+        );
+        return;
+      }
+      if (url.pathname === '/api/suppressions' && req.method === 'POST') {
+        if (tasks === null) {
+          json(res, 403, { error: 'controls are disabled — restart with --control' });
+          return;
+        }
+        readBody(req, (body) => {
+          const input = body as { value?: unknown; reason?: unknown };
+          const optOut =
+            typeof input.value === 'string'
+              ? parseOptOut(input.value, config.market.country)
+              : null;
+          if (optOut === null) {
+            json(res, 400, { error: 'Enter an email, a phone number or a website.' });
+            return;
+          }
+          const driver = openDatabaseFromConfig(config);
+          try {
+            new EmailsRepository(driver).addSuppression(
+              optOut.kind,
+              optOut.value,
+              typeof input.reason === 'string' && input.reason.trim() !== ''
+                ? input.reason.trim().slice(0, 200)
+                : 'dashboard',
+            );
+          } finally {
+            driver.close();
+          }
+          json(res, 200, optOut);
+        });
         return;
       }
 

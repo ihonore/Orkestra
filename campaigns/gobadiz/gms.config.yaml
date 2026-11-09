@@ -49,3 +49,13 @@ qualify:
   # A suburb found by a Paris search waits until its département is switched
   # on in the Cities page.
   activeAreasOnly: true
+
+exporters:
+  sheets:
+    # One row per qualified lead, French headers, phone-only leads included.
+    # The sheet id and key file go in gms.config.local.yaml, which the
+    # dashboard's Google Sheets step writes.
+    layout: prospects
+    prospectsSheetName: Prospects
+    # The team writes call notes in the sheet: never clear and re-send it.
+    rebuildOnRescrape: false
