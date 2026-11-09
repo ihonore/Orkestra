@@ -13,6 +13,7 @@
  * better than completing it with empty data** — the run can be restarted, but
  * nobody re-checks 40,000 rows that already look finished.
  */
+import { saysByAppointment, signalsFrom } from '../../../core/util/business-links.js';
 import type { DomExtraction } from './from-dom.js';
 import type { UrlExtraction } from './from-url.js';
 import type { XhrExtraction } from './from-xhr.js';
@@ -59,6 +60,13 @@ export interface MergedBusiness {
   readonly hoursJson: string | null;
   readonly permanentlyClosed: boolean;
   readonly gmapsUrl: string | null;
+  /** From the listing's links or its website field. */
+  readonly instagramUrl: string | null;
+  /** "Planity", "Treatwell, Fresha", "own site"… — null when none was seen. */
+  readonly bookingProvider: string | null;
+  readonly bookingUrl: string | null;
+  /** The name says it works by appointment only. */
+  readonly byAppointment: boolean;
 }
 
 export interface MergeInput {
@@ -184,6 +192,13 @@ export function mergeExtractions(input: MergeInput): MergeResult {
   const websiteUrl = normalizeWebsiteUrl(websiteRaw);
   const domainInfo = domainOf(websiteUrl);
 
+  // Network links first: they carry each provider's page for this salon,
+  // where the panel's provider rows only name the platform.
+  const signals = signalsFrom(
+    [...(input.xhr.links ?? []), ...(input.dom.links ?? []), websiteUrl],
+    domainInfo?.isSocial === true ? null : (domainInfo?.domain ?? null),
+  );
+
   const lat = take<number>('lat', { url: input.url.lat, xhr: input.xhr.lat });
   const lng = take<number>('lng', { url: input.url.lng, xhr: input.xhr.lng });
 
@@ -229,6 +244,10 @@ export function mergeExtractions(input: MergeInput): MergeResult {
     hoursJson: input.dom.hours,
     permanentlyClosed: input.xhr.permanentlyClosed ?? input.dom.permanentlyClosed,
     gmapsUrl: input.gmapsUrl,
+    instagramUrl: signals.instagramUrl,
+    bookingProvider: signals.bookingProvider,
+    bookingUrl: signals.bookingUrl,
+    byAppointment: saysByAppointment(name),
   };
 
   return {

@@ -12,6 +12,12 @@
  */
 import { fetchRobots, fetchPage, ALLOW_ALL, type RobotsRules } from '../../core/http/fetcher.js';
 import { humanPause } from '../../core/browser/humanize.js';
+import {
+  classifyLink,
+  saysByAppointment,
+  signalsFrom,
+  type BusinessSignals,
+} from '../../core/util/business-links.js';
 import type { Logger } from '../../core/logging/logger.js';
 import type { ProxySettings } from '../../core/proxy/types.js';
 import { extractEmails, type ExtractionMethod } from './extract/index.js';
@@ -85,6 +91,8 @@ export interface CrawlResult {
   readonly usedRobots: boolean;
   readonly error: string | null;
   readonly stoppedBecause: string;
+  /** Instagram and booking links the site carries, and whether it says "sur rendez-vous". */
+  readonly signals: BusinessSignals & { readonly byAppointment: boolean };
 }
 
 /** Phrases that mean the domain is for sale or unconfigured. */
@@ -128,6 +136,11 @@ export async function crawlDomain(options: CrawlOptions): Promise<CrawlResult> {
     return result('failed', 'invalid start URL');
   }
 
+  // Off-site links that say something about the business: its Instagram, the
+  // booking platform its "Prendre rendez-vous" button goes to.
+  const siteLinks: string[] = [];
+  let byAppointment = false;
+
   function result(status: CrawlStatus, error: string | null = null): CrawlResult {
     return {
       domain: options.domain,
@@ -143,6 +156,7 @@ export async function crawlDomain(options: CrawlOptions): Promise<CrawlResult> {
       usedRobots: options.respectRobots !== false,
       error,
       stoppedBecause,
+      signals: { ...signalsFrom(siteLinks, options.domain), byAppointment },
     };
   }
 
@@ -252,6 +266,15 @@ export async function crawlDomain(options: CrawlOptions): Promise<CrawlResult> {
       return result('parked');
     }
 
+    // ── Signals: every page, whatever its depth ───────────────────────────────
+    const links = extractLinks(page.body, page.url);
+    for (const link of links) {
+      if (siteLinks.length < 50 && classifyLink(link.url, options.domain) !== null) {
+        siteLinks.push(link.url);
+      }
+    }
+    if (!byAppointment && saysByAppointment(visibleText(page.body))) byAppointment = true;
+
     // ── Extract and validate ────────────────────────────────────────────────
     const candidates = extractEmails(page.body);
     let keptOnPage = 0;
@@ -297,7 +320,7 @@ export async function crawlDomain(options: CrawlOptions): Promise<CrawlResult> {
 
     // ── Queue further links ─────────────────────────────────────────────────
     if (next.depth < (options.maxDepth ?? 1)) {
-      for (const link of extractLinks(page.body, page.url)) {
+      for (const link of links) {
         frontier.offer(link.url, {
           depth: next.depth + 1,
           anchorText: link.anchorText,
@@ -316,6 +339,15 @@ export async function crawlDomain(options: CrawlOptions): Promise<CrawlResult> {
   // budget that merely happened to be reached at the same moment.
   if (pagesFetched >= maxPages && stoppedBecause !== 'aborted') stoppedBecause = 'page-budget';
   return result('done');
+}
+
+/** A page's text, roughly: scripts, styles and tags removed. */
+function visibleText(html: string): string {
+  return html
+    .replace(/<(script|style|noscript)\b[\s\S]*?<\/\1>/gi, ' ')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&nbsp;|&#160;/g, ' ')
+    .replace(/\s+/g, ' ');
 }
 
 /**

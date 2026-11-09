@@ -5,6 +5,7 @@
  * data quietly becomes wrong: a phone number that keeps its formatting cannot be
  * deduplicated, and a website URL that is not unwrapped points at google.com.
  */
+import { bookingPlatformOf } from '../../core/util/business-links.js';
 import { parse as parseDomain } from 'tldts';
 import { createHash } from 'node:crypto';
 
@@ -117,6 +118,11 @@ const NON_WEBSITE_DOMAINS = new Set([
   'sites.google.com',
   'goo.gl',
   'maps.app.goo.gl',
+  // Link-in-bio pages: a list of the business's other links, never its address.
+  'linktr.ee',
+  'beacons.ai',
+  'lnk.bio',
+  'taplink.cc',
 ]);
 
 export interface DomainInfo {
@@ -140,7 +146,12 @@ export function domainOf(websiteUrl: string | null | undefined): DomainInfo | nu
   const domain = parsed.domain?.toLowerCase();
   if (domain === undefined || domain === null || domain === '') return null;
 
-  return { domain, isSocial: NON_WEBSITE_DOMAINS.has(domain) };
+  // A booking platform's pages carry the platform's addresses: crawling
+  // planity.com for one salon would pin Planity's email on every salon there.
+  return {
+    domain,
+    isSocial: NON_WEBSITE_DOMAINS.has(domain) || bookingPlatformOf(domain) !== null,
+  };
 }
 
 /**

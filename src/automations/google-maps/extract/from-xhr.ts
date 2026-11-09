@@ -94,6 +94,8 @@ export interface XhrExtraction {
   readonly lat: number | null;
   readonly lng: number | null;
   readonly permanentlyClosed: boolean | null;
+  /** Booking (`rwg_token`) and Instagram links in this place's own record. */
+  readonly links?: readonly string[];
 }
 
 const EMPTY: XhrExtraction = {
@@ -231,6 +233,44 @@ const PHONE_PATTERNS: Readonly<Record<Country, RegExp>> = { US: PHONE_RE, FR: FR
  * yields nulls, the DOM channel fills the gap, and the health guard notices the
  * fill-rate drop — rather than the job throwing and the run stopping.
  */
+/**
+ * Every value under `data` matching a predicate, skipping nested records of
+ * other places exactly as {@link findFirst} does.
+ */
+function findAll(
+  data: unknown,
+  predicate: (value: unknown) => boolean,
+  ownFid: string | null = null,
+  out: unknown[] = [],
+  depth = 0,
+  maxDepth = 12,
+): unknown[] {
+  if (depth > maxDepth || data === null || data === undefined) return out;
+  if (predicate(data)) {
+    out.push(data);
+    return out;
+  }
+  if (!Array.isArray(data)) return out;
+  for (const child of data) {
+    const childFid = directFid(child);
+    if (ownFid !== null && childFid !== null && childFid !== ownFid) continue;
+    findAll(child, predicate, ownFid, out, depth + 1, maxDepth);
+  }
+  return out;
+}
+
+/**
+ * A link about this business that is not its website: a Google booking link
+ * (`rwg_token`, one per provider the business books through) or a social
+ * profile. Kept raw; `signalsFrom` decides what each one means.
+ */
+function isSignalLink(value: unknown): boolean {
+  if (typeof value !== 'string' || !URL_RE.test(value)) return false;
+  return (
+    value.includes('rwg_token=') || /^https?:\/\/(?:[a-z0-9-]+\.)*instagram\.com\//i.test(value)
+  );
+}
+
 export function extractFromXhr(
   payload: unknown,
   target?: PlaceIdentity,
@@ -300,9 +340,16 @@ export function extractFromXhr(
     own,
   );
 
-  const rating = asNumber(
-    findFirst(node, (v) => typeof v === 'number' && v > 0 && v <= 5 && !Number.isInteger(v), own),
-  );
+  // The rating sits at [4][7]. A search for "any decimal from 0 to 5" used to
+  // stand in for it, and found the wrong number whenever the rating was a
+  // whole 5 (stored as an integer, so skipped) or absent: a Paris longitude
+  // (2.38…) became the rating, and a third of US ratings had four decimals.
+  // Without the path, the panel's star label supplies it.
+  const ratingAtPath = asNumber(at(node, 4, 7));
+  const rating =
+    ratingAtPath !== null && ratingAtPath >= 1 && ratingAtPath <= 5 ? ratingAtPath : null;
+
+  const links = findAll(node, isSignalLink, own).filter((v): v is string => typeof v === 'string');
 
   return {
     name: asString(at(node, 11)) ?? asString(at(node, 1)),
@@ -317,6 +364,7 @@ export function extractFromXhr(
     lat: Array.isArray(coords) ? asNumber(coords[0]) : null,
     lng: Array.isArray(coords) ? asNumber(coords[1]) : null,
     permanentlyClosed: null,
+    links: [...new Set(links)],
   };
 }
 
@@ -369,6 +417,7 @@ export class XhrCollector {
         website: next.website ?? merged.website,
         categoryPrimary: next.categoryPrimary ?? merged.categoryPrimary,
         rating: next.rating ?? merged.rating,
+        links: [...new Set([...(merged.links ?? []), ...(next.links ?? [])])],
         reviews: next.reviews ?? merged.reviews,
         lat: next.lat ?? merged.lat,
         lng: next.lng ?? merged.lng,

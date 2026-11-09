@@ -180,6 +180,8 @@ export async function runEnrichEmails(options: EnrichCommandOptions): Promise<vo
             }
           }
 
+          emails.setDomainSignals(domain.id, result.signals);
+
           // Rejects are stored but never linked to a business, so they cannot
           // reach an export even by accident. They exist purely so the "Rejected"
           // breakdown can show which rule is throwing what away.

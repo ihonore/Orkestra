@@ -327,6 +327,38 @@ export class EmailsRepository extends BaseRepository {
     );
   }
 
+  /**
+   * What a crawl found about the business beyond addresses: its Instagram,
+   * its booking platform, whether it says "sur rendez-vous". A later crawl
+   * that finds nothing does not erase an earlier finding.
+   */
+  setDomainSignals(
+    id: number,
+    signals: {
+      readonly instagramUrl: string | null;
+      readonly bookingProvider: string | null;
+      readonly bookingUrl: string | null;
+      readonly byAppointment: boolean;
+    },
+  ): void {
+    this.driver
+      .prepare(
+        `UPDATE domains SET
+           instagram_url = COALESCE(:instagramUrl, instagram_url),
+           booking_provider = COALESCE(:bookingProvider, booking_provider),
+           booking_url = COALESCE(:bookingUrl, booking_url),
+           by_appointment = MAX(by_appointment, :byAppointment)
+         WHERE id = :id`,
+      )
+      .run({
+        id,
+        instagramUrl: signals.instagramUrl,
+        bookingProvider: signals.bookingProvider,
+        bookingUrl: signals.bookingUrl,
+        byAppointment: signals.byAppointment ? 1 : 0,
+      });
+  }
+
   /** Businesses whose website is on this domain, so found addresses can be linked. */
   businessesForDomain(domainId: number): { id: number; name: string }[] {
     return this.driver

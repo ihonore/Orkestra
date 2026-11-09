@@ -36,6 +36,12 @@ export interface DomExtraction {
   readonly hours: string | null;
   readonly thumbnail: string | null;
   readonly permanentlyClosed: boolean;
+  /**
+   * The panel's booking and Instagram links: "Book online" links (they carry
+   * `rwg_token`), Instagram profile links, and the provider rows Maps shows
+   * as a bare domain ("treatwell.fr"), turned into `https://treatwell.fr/`.
+   */
+  readonly links?: readonly string[];
 }
 
 /**
@@ -97,6 +103,18 @@ export async function extractFromDom(page: Page): Promise<DomExtraction> {
 
     const closedText = root.textContent ?? '';
 
+    const links: string[] = [];
+    for (const anchor of root.querySelectorAll('a[href]')) {
+      const href = (anchor as HTMLAnchorElement).href;
+      if (href.includes('rwg_token=') || /instagram\.com\//i.test(href)) links.push(href);
+    }
+    // An action row ("Book", "Order") names its provider as a bare domain,
+    // after an icon glyph.
+    for (const row of root.querySelectorAll('[data-item-id^="action:"]')) {
+      const host = (row.textContent ?? '').trim().replace(/^[^a-z0-9]+/i, '');
+      if (/^[a-z0-9-]+(\.[a-z0-9-]+)+$/i.test(host)) links.push(`https://${host.toLowerCase()}/`);
+    }
+
     return {
       name,
       categoryPrimary: text('button[jsaction*="category"]') ?? text('[jsaction*="category"]'),
@@ -114,6 +132,7 @@ export async function extractFromDom(page: Page): Promise<DomExtraction> {
       thumbnail:
         attr('button[jsaction*="heroHeaderImage"] img', 'src') ?? attr('img[decoding]', 'src'),
       permanentlyClosed: /permanently closed/i.test(closedText),
+      links,
     };
   }, PANEL);
 }

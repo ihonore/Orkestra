@@ -115,6 +115,12 @@ function toPersistable(
       // The listing's own panel was read (that is where a DOM name comes from),
       // so what it shows for the website — or that it shows none — is the truth.
       websiteConfirmed: result.provenance.name === 'dom',
+      signals: {
+        instagramUrl: b.instagramUrl,
+        bookingProvider: b.bookingProvider,
+        bookingUrl: b.bookingUrl,
+        byAppointment: b.byAppointment,
+      },
       rawJson: null,
       automationId,
       runId,

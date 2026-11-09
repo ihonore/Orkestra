@@ -60,6 +60,13 @@ export interface BusinessInput {
    * have none, and COALESCE kept the image through every re-scrape.
    */
   readonly websiteConfirmed?: boolean;
+  /** Instagram, booking platform and by-appointment, from the listing. */
+  readonly signals?: {
+    readonly instagramUrl: string | null;
+    readonly bookingProvider: string | null;
+    readonly bookingUrl: string | null;
+    readonly byAppointment: boolean;
+  };
 }
 
 export interface SightingInput {
@@ -96,6 +103,7 @@ export class BusinessesRepository extends BaseRepository {
   readonly #insert: PreparedStatement<{ id: number }>;
   readonly #update: PreparedStatement;
   readonly #insertSighting: PreparedStatement;
+  #setSignals: PreparedStatement | null = null;
   readonly #upsertDomain: PreparedStatement<{ id: number }>;
 
   constructor(driver: SqliteDriver) {
@@ -259,6 +267,7 @@ export class BusinessesRepository extends BaseRepository {
       const changedSite =
         input.websiteConfirmed === true && (input.domainId ?? null) !== existing.domain_id;
       if (changedSite) this.#dropForeignLinks.run({ id: existing.id, domainId: input.domainId });
+      this.#writeSignals(existing.id, input);
       return { id: existing.id, created: false };
     }
 
@@ -266,7 +275,32 @@ export class BusinessesRepository extends BaseRepository {
     if (inserted === undefined) {
       throw new Error(`insert of business ${input.name} returned no row`);
     }
+    this.#writeSignals(inserted.id, input);
     return { id: inserted.id, created: true };
+  }
+
+  #writeSignals(id: number, input: BusinessInput): void {
+    const s = input.signals;
+    if (s === undefined) return;
+    // Prepared on first use, so a repository opened on a database from before
+    // migration 0010 still works for everything else.
+    // Kept out of the main insert and update: a thinner later sighting keeps
+    // what an earlier one found, and by-appointment, once seen, stays set.
+    this.#setSignals ??= this.driver.prepare(
+      `UPDATE businesses SET
+         instagram_url = COALESCE(:instagramUrl, instagram_url),
+         booking_provider = COALESCE(:bookingProvider, booking_provider),
+         booking_url = COALESCE(:bookingUrl, booking_url),
+         by_appointment = MAX(by_appointment, :byAppointment)
+       WHERE id = :id`,
+    );
+    this.#setSignals.run({
+      id,
+      instagramUrl: s.instagramUrl,
+      bookingProvider: s.bookingProvider,
+      bookingUrl: s.bookingUrl,
+      byAppointment: s.byAppointment ? 1 : 0,
+    });
   }
 
   recordSighting(input: SightingInput, now: Timestamp = Date.now()): void {
