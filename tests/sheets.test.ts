@@ -25,11 +25,19 @@ afterEach(async () => {
   for (const s of servers.splice(0)) await s.close();
 });
 
+/** A tab this tool has already written to: it has its header. */
+const WRITTEN = [[{ userEnteredValue: { stringValue: 'name' } }]];
+
 async function exporter(
-  options: { tabs?: { title: string; sheetId: number; rows?: number; cols?: number }[] } = {},
+  options: {
+    tabs?: { title: string; sheetId: number; rows?: number; cols?: number; values?: unknown[][] }[];
+  } = {},
 ): Promise<{ mock: MockSheets; sheets: SheetsExporter }> {
   const mock = await startMockSheets({
-    existingTabs: options.tabs ?? [{ title: 'Leads', sheetId: 7 }],
+    existingTabs: (options.tabs ?? [{ title: 'Leads', sheetId: 7 }]).map((tab) => ({
+      values: WRITTEN,
+      ...tab,
+    })),
   });
   servers.push(mock);
   return {
@@ -314,5 +322,53 @@ describe('rebuilding a tab', () => {
     expect(
       mock.requests.some((r) => JSON.stringify(r.body ?? '').includes('deleteDimension')),
     ).toBe(false);
+  });
+});
+
+describe('the header row', () => {
+  const schema = { entity: 'x', fields: [text, number], sql: '' };
+  const header = (mock: MockSheets) =>
+    (mock.rows('Leads')[0] as { userEnteredValue: { stringValue: string } }[]).map(
+      (c) => c.userEnteredValue.stringValue,
+    );
+
+  it('is written, styled and frozen on a tab someone emptied or made by hand', async () => {
+    const { mock, sheets } = await exporter({ tabs: [{ title: 'Leads', sheetId: 7, values: [] }] });
+    await sheets.append([{ name: 'Nina Nails', rating: 4.8 }], schema);
+
+    expect(header(mock)).toEqual(['name', 'rating']);
+    expect(mock.rows('Leads')).toHaveLength(2);
+    const cell = mock.rows('Leads')[0]![0] as { userEnteredFormat: Record<string, unknown> };
+    expect(cell.userEnteredFormat['textFormat']).toMatchObject({ bold: true });
+    expect(cell.userEnteredFormat['backgroundColor']).toBeDefined();
+    const freeze = mock.requests.some((r) =>
+      JSON.stringify(r.body ?? '').includes('"frozenRowCount":1'),
+    );
+    expect(freeze).toBe(true);
+  });
+
+  it('is not written again on a tab that has one', async () => {
+    const { mock, sheets } = await exporter();
+    await sheets.append([{ name: 'Nina Nails', rating: 4.8 }], schema);
+    expect(mock.rows('Leads')).toHaveLength(2);
+  });
+
+  it('is not slipped under rows that are already there', async () => {
+    // Header cleared by hand, data left: appending a header would put it at
+    // the bottom. Leave the tab as it is.
+    const row = [{ userEnteredValue: { stringValue: 'Nina Nails' } }];
+    const { mock, sheets } = await exporter({
+      tabs: [{ title: 'Leads', sheetId: 7, values: [[], row] }],
+    });
+    await sheets.append([{ name: 'Salon B', rating: 4 }], schema);
+    expect(mock.rows('Leads')).toHaveLength(3);
+    expect(JSON.stringify(mock.rows('Leads')[0])).toBe('[]');
+  });
+
+  it('is written once when the tab is created', async () => {
+    const { mock, sheets } = await exporter({ tabs: [] });
+    await sheets.append([{ name: 'Nina Nails', rating: 4.8 }], schema);
+    expect(header(mock)).toEqual(['name', 'rating']);
+    expect(mock.rows('Leads')).toHaveLength(2);
   });
 });

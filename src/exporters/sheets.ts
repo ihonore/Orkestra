@@ -237,6 +237,9 @@ export async function withRetry<T>(
  * processes would still race, and the `row_uid` column is what makes that
  * detectable afterwards.
  */
+/** #2E3A46. */
+const HEADER_BACKGROUND = { red: 0.18, green: 0.227, blue: 0.275 } as const;
+
 export class SheetsExporter {
   readonly #api: sheets_v4.Sheets;
   readonly #spreadsheetId: string;
@@ -312,6 +315,12 @@ export class SheetsExporter {
     } else {
       this.#sheetId = existing.properties?.sheetId ?? null;
       this.#rowCount = existing.properties?.gridProperties?.rowCount ?? 0;
+      // A tab made by hand, or emptied to start over, gets the header a tab
+      // made here would have had. Without this, rows went in from row 1 with
+      // no header at all.
+      if (this.#sheetId !== null && (await this.#isEmpty())) {
+        await this.#writeHeader(schema, this.#sheetId);
+      }
     }
 
     return { cellsUsed, cellsFree: Math.max(0, MAX_CELLS_PER_SPREADSHEET - cellsUsed) };
@@ -380,15 +389,61 @@ export class SheetsExporter {
       throw new Error(`could not create sheet tab "${this.#sheetName}"`);
     }
 
-    await this.#appendChunk([this.#headerRow(schema)], sheetId);
+    await this.#writeHeader(schema, sheetId);
     return sheetId;
+  }
+
+  /**
+   * Whether the tab holds nothing yet: its first two rows are blank.
+   *
+   * Two rows, not one, so a sheet whose header was cleared but whose rows
+   * remain is not mistaken for empty — a header appended there would land
+   * below the data. Such a tab is left as it is.
+   */
+  async #isEmpty(): Promise<boolean> {
+    const { data } = await this.#api.spreadsheets.values.get({
+      spreadsheetId: this.#spreadsheetId,
+      range: `'${this.#sheetName.replace(/'/g, "''")}'!1:2`,
+    });
+    const blank = (cell: unknown): boolean =>
+      cell === null || cell === undefined || (typeof cell === 'string' && cell.trim() === '');
+    return (data.values ?? []).every((row: unknown[]) => row.every(blank));
+  }
+
+  /** The header row, styled, as row 1, and frozen so it stays in view. */
+  async #writeHeader(schema: RecordSchema, sheetId: number): Promise<void> {
+    await this.#api.spreadsheets.batchUpdate({
+      spreadsheetId: this.#spreadsheetId,
+      requestBody: {
+        requests: [
+          {
+            appendCells: {
+              sheetId,
+              rows: [this.#headerRow(schema)],
+              fields: 'userEnteredValue,userEnteredFormat(textFormat,backgroundColor)',
+            },
+          },
+          {
+            updateSheetProperties: {
+              properties: { sheetId, gridProperties: { frozenRowCount: 1 } },
+              fields: 'gridProperties.frozenRowCount',
+            },
+          },
+        ],
+      },
+    });
+    this.options.logger?.info({ tab: this.#sheetName }, 'wrote the header row');
   }
 
   #headerRow(schema: RecordSchema): sheets_v4.Schema$RowData {
     return {
       values: schema.fields.map((field) => ({
         userEnteredValue: { stringValue: field.name },
-        userEnteredFormat: { textFormat: { bold: true } },
+        userEnteredFormat: {
+          // White on dark slate: unmistakably the header, and readable printed.
+          backgroundColor: HEADER_BACKGROUND,
+          textFormat: { bold: true, foregroundColor: { red: 1, green: 1, blue: 1 } },
+        },
       })),
     };
   }
