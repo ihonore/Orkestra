@@ -27,6 +27,7 @@ import { runImportCategories, runImportCities, runListSheets } from './commands/
 import { runInit } from './commands/init.js';
 import { runPlan } from './commands/plan.js';
 import { runQueue } from './commands/queue.js';
+import { runQualify } from './commands/qualify.js';
 import { runSeedsLoad, runSeedsSave } from './commands/seeds.js';
 import { runRun } from './commands/run.js';
 import { runJobsList, runJobsRetry, runStatus } from './commands/status.js';
@@ -379,6 +380,14 @@ export function buildProgram(): Command {
         ...(options.maxDomains !== undefined && { maxDomains: options.maxDomains }),
         json: options.json,
       });
+    });
+
+  program
+    .command('qualify')
+    .description("apply the campaign's rules: specialties, exclusions, leads ready to send")
+    .option('--json', 'emit machine-readable output', false)
+    .action((options: { json: boolean }) => {
+      runQualify({ config: configFrom(program), json: options.json });
     });
 
   program

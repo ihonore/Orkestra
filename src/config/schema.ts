@@ -97,6 +97,36 @@ export const MarketSchema = z
     }
   });
 
+/**
+ * Which leads a campaign wants. Off by default: the main campaign exports
+ * every business it finds, exactly as before.
+ *
+ * On, every business gets a specialty, a reason when it is not wanted (a
+ * chain, a hotel spa, out of area), and a place in the order leads become
+ * ready. Excluded businesses stay in the database but are never crawled for
+ * email or exported.
+ */
+export const QualifySchema = z
+  .object({
+    enabled: z.boolean().default(false),
+    /**
+     * CSV: Google category, Libellé, Spécialité, Exclure. Maps the English
+     * category Google gives to the campaign's label and specialty, or to a
+     * reason to leave the business out. Relative to the config file.
+     */
+    categoriesFile: z.string().min(1).optional(),
+    /** YAML: chain names, and name keywords that exclude a business. */
+    exclusionsFile: z.string().min(1).optional(),
+    /** This many listings sharing one website make a chain. */
+    chainSiteThreshold: z.number().int().min(2).max(100).default(3),
+    /**
+     * Leave out a business whose postcode is in a département with no active
+     * city: a suburb found by a Paris search waits until its area opens.
+     */
+    activeAreasOnly: z.boolean().default(true),
+  })
+  .strict();
+
 export const DatabaseSchema = z
   .object({
     /** Only `sqlite` is implemented. `postgres` is a deliberate future option. */
@@ -377,6 +407,7 @@ export const ConfigSchema = z
     project: ProjectSchema.prefault({}),
     seeds: SeedsSchema.prefault({}),
     market: MarketSchema.prefault({}),
+    qualify: QualifySchema.prefault({}),
     ui: UiSchema.prefault({}),
     database: DatabaseSchema.prefault({}),
     logging: LoggingSchema.prefault({}),

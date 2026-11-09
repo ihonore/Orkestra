@@ -38,3 +38,14 @@ enrichment:
     # French sites: the contact page, and the "mentions légales" every
     # business site must publish, usually with an email in it.
     guessPaths: ['/contact', '/nous-contacter', '/mentions-legales']
+
+# Which leads Gobadiz wants: see categories.csv and exclusions.yaml.
+qualify:
+  enabled: true
+  categoriesFile: ./categories.csv
+  exclusionsFile: ./exclusions.yaml
+  # Three listings sharing one website make a chain.
+  chainSiteThreshold: 3
+  # A suburb found by a Paris search waits until its département is switched
+  # on in the Cities page.
+  activeAreasOnly: true

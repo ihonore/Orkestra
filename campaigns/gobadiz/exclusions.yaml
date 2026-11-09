@@ -1,0 +1,94 @@
+# Businesses Gobadiz does not want, by name.
+#
+# Names are compared without accents, case or punctuation, and as whole
+# words: "Jean Louis David" also matches "JEAN-LOUIS DAVID - Paris 11", and
+# "hotel" does not match "Hotelia Nails". After an edit, run
+#   gms --campaign gobadiz qualify
+# to apply it to everything already found. A lead already sent to the sheet
+# stays there.
+#
+# Google categories are excluded in categories.csv instead.
+
+# National chains and franchises: head office decides, and they have their
+# own booking tools. A chain missing from this list is still caught when
+# three or more of its listings share one website.
+chains:
+  # Hair
+  - Franck Provost
+  - Jean Louis David
+  - Dessange
+  - Camille Albane
+  - Saint Algue
+  - Tchip
+  - Coiff&Co
+  - Fabio Salsa
+  - Intermède
+  - Mod's Hair
+  - Toni & Guy
+  - Toni&Guy
+  - Pascal Coste
+  - Vog Coiffure
+  - Biguine
+  - Shampoo
+  # Beauty
+  - Body Minute
+  - Bodyminute
+  - Esthetic Center
+  - Yves Rocher
+  - Marionnaud
+  - Sephora
+  - Nocibé
+  - Beauty Success
+  - Passion Beauté
+  - L'Occitane
+  - Guerlain
+  - Clarins
+  - Nuxe
+  - Point Soleil
+  - L'Atelier du Sourcil
+  - Benefit Brow Bar
+
+# Each rule: the reason the sheet report shows, and the words in a name that
+# trigger it. With `categories`, only for businesses in one of those Google
+# categories (English, as in categories.csv).
+rules:
+  - reason: Spa d'hôtel ou thalasso
+    names: [thalasso, thalassotherapie]
+
+  # "Hôtel" alone is too common in Paris salon names ("Hôtel de Ville"), so
+  # only for spas and massage.
+  - reason: Spa d'hôtel ou thalasso
+    names: [hotel, resort, palace]
+    categories: [Spa, Day spa, Massage spa, Health spa, Massage therapist, Facial spa]
+
+  # Not services Gobadiz offers. Laser hair removal is kept: the Gobadiz
+  # catalogue lists "Épilation définitive (laser, lumière pulsée)".
+  - reason: Esthétique médicale
+    names:
+      - medecine esthetique
+      - medecin esthetique
+      - docteur
+      - injection
+      - injections
+      - botox
+      - acide hyaluronique
+      - clinique esthetique
+      - chirurgie esthetique
+      - chirurgien
+
+  - reason: Tatouage / piercing
+    names: [tattoo, tatouage, tatoueur, piercing]
+
+  # Forbidden on Gobadiz.
+  - reason: Massage érotique
+    names:
+      - tantra
+      - tantrique
+      - naturiste
+      - nuru
+      - erotique
+      - sensuel
+      - sensuelle
+      - body body
+      - happy ending
+      - massage intime

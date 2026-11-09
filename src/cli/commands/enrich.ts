@@ -6,6 +6,7 @@
  * slow website never stalls a browser worker, and enrichment can be re-run with
  * better rules without re-scraping Google Maps.
  */
+import { qualifyIfEnabled } from '../../qualify/pass.js';
 import type { ResolvedConfig } from '../../config/schema.js';
 import { ShutdownController } from '../../core/engine/shutdown.js';
 import { createLogger } from '../../core/logging/logger.js';
@@ -75,6 +76,20 @@ export async function runEnrichEmails(options: EnrichCommandOptions): Promise<vo
   }
   if (rejudged.ownership > 0) {
     logger.info({ count: rejudged.ownership }, "email links re-judged as someone else's");
+  }
+
+  // A campaign that qualifies its leads takes unwanted businesses' sites out
+  // of the queue before any worker claims one.
+  const qualified = qualifyIfEnabled(driver, config);
+  if (qualified !== null) {
+    logger.info(
+      {
+        wanted: qualified.wanted,
+        excluded: qualified.excluded,
+        sitesRetired: qualified.sitesRetired,
+      },
+      'leads qualified',
+    );
   }
 
   const reclaimed = emails.reclaimStalledDomains(domainLeaseMs);

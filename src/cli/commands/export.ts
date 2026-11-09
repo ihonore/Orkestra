@@ -6,6 +6,7 @@
  * cursor simply has not advanced. The legacy Apps Script wrote straight to
  * Sheets, so a failed write dropped a listing permanently.
  */
+import { qualifyIfEnabled } from '../../qualify/pass.js';
 import path from 'node:path';
 import type { ResolvedConfig } from '../../config/schema.js';
 import { AppError } from '../../core/errors/taxonomy.js';
@@ -62,6 +63,9 @@ export function runExportCsv(options: ExportCsvOptions): void {
 
   const outDir = options.outDir ?? options.config.paths.exportsDir;
   const driver = openDatabaseFromConfig(options.config);
+  // Leads become ready here as well as after a crawl, so an export never
+  // misses ones whose last step was a rule change.
+  qualifyIfEnabled(driver, options.config);
   const cursors = new ExportsRepository(driver);
   const target = path.resolve(outDir);
 
@@ -258,6 +262,7 @@ export async function runExportSheets(options: ExportSheetsOptions): Promise<voi
     options.sheetName ??
     (entity === 'leads-by-business' ? settings.businessSheetName : settings.sheetName);
   const driver = openDatabaseFromConfig(options.config);
+  qualifyIfEnabled(driver, options.config);
   const cursors = new ExportsRepository(driver);
 
   try {

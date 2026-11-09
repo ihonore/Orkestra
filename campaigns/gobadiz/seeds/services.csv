@@ -1,19 +1,19 @@
-Name,Weight,Aliases,Active
-tresses,8,,yes
-coiffure afro,8,,yes
-locks,8,,yes
-onglerie,7,,yes
-prothésiste ongulaire,7,,yes
-extension de cils,6,,yes
-rehaussement de cils,6,,yes
-sourcils,6,,yes
-maquilleuse,5,,yes
-maquillage mariage,5,,yes
-barbier,4,,yes
-barber,4,,yes
-institut de beauté,3,,yes
-esthéticienne,3,,yes
-épilation,3,,yes
-salon de coiffure,2,,yes
-coiffeur,2,,yes
-massage bien-être,1,,yes
+Name,Weight,Aliases,Active,Specialty
+tresses,8,,yes,Coiffure
+coiffure afro,8,,yes,Coiffure
+locks,8,,yes,Coiffure
+onglerie,7,,yes,Onglerie
+prothésiste ongulaire,7,,yes,Onglerie
+extension de cils,6,,yes,Esthétique
+rehaussement de cils,6,,yes,Esthétique
+sourcils,6,,yes,Esthétique
+maquilleuse,5,,yes,Maquillage
+maquillage mariage,5,,yes,Maquillage
+barbier,4,,yes,Barbier
+barber,4,,yes,Barbier
+institut de beauté,3,,yes,Esthétique
+esthéticienne,3,,yes,Esthétique
+épilation,3,,yes,Esthétique
+salon de coiffure,2,,yes,Coiffure
+coiffeur,2,,yes,Coiffure
+massage bien-être,1,,yes,Massage

@@ -208,6 +208,7 @@ export function parseCategoryRows(rows: SheetRows): ParsedCategories {
   const cWeight = column(header, 'weight', 'priority');
   const cAliases = column(header, 'aliases', 'alternates');
   const cActive = column(header, 'active');
+  const cSpecialty = column(header, 'specialty', 'spécialité', 'specialite');
 
   const categories: CategoryInput[] = [];
   const rejected: RejectedRow[] = [];
@@ -251,6 +252,9 @@ export function parseCategoryRows(rows: SheetRows): ParsedCategories {
       aliases,
       weight: cleanNumber(cWeight === null ? null : row[cWeight]) ?? 1.0,
       legacyStatus: cleanText(cStatus === null ? null : row[cStatus]),
+      // Only a list with the column sets it, so loading one without it
+      // leaves a specialty set elsewhere alone.
+      ...(cSpecialty !== null && { specialty: cleanText(row[cSpecialty]) }),
     });
   }
 

@@ -52,6 +52,8 @@ export interface CategoryRecord {
   readonly weight: number;
   readonly active: number;
   readonly legacy_status: string | null;
+  /** What the search term means for the campaign, e.g. "Coiffure". Migration 0011. */
+  readonly specialty?: string | null;
 }
 
 export interface CategoryInput {
@@ -62,6 +64,8 @@ export interface CategoryInput {
   readonly legacyStatus?: string | null;
   /** Applied on first insert only. See {@link CityInput.active}. */
   readonly active?: boolean;
+  /** Set only when given; undefined leaves the stored value alone. */
+  readonly specialty?: string | null;
 }
 
 export interface UpsertResult {
@@ -72,7 +76,7 @@ export interface UpsertResult {
 const CITY_COLUMNS = `id, zip, city, state, state_code, county, county_fips, lat, lng,
   population, active, legacy_status, source`;
 
-const CATEGORY_COLUMNS = `id, name, slug, aliases, weight, active, legacy_status`;
+const CATEGORY_COLUMNS = `id, name, slug, aliases, weight, active, legacy_status, specialty`;
 
 function cityParams(c: CityInput, now: Timestamp): Record<string, string | number | null> {
   return {
@@ -254,6 +258,7 @@ export class CitiesRepository extends BaseRepository {
 }
 
 export class CategoriesRepository extends BaseRepository {
+  #setSpecialty: PreparedStatement | null = null;
   readonly #upsert: PreparedStatement;
 
   constructor(driver: SqliteDriver) {
@@ -282,6 +287,14 @@ export class CategoriesRepository extends BaseRepository {
           legacyStatus: c.legacyStatus ?? null,
           now,
         });
+        if (c.specialty !== undefined) {
+          // Prepared on first use: only a list with a Specialty column needs
+          // it, and only a database with migration 0011 has the column.
+          this.#setSpecialty ??= this.driver.prepare(
+            `UPDATE categories SET specialty = :specialty WHERE slug = :slug`,
+          );
+          this.#setSpecialty.run({ slug: c.slug, specialty: c.specialty });
+        }
       }
       const inserted = this.count(false) - before;
       return { inserted, updated: categories.length - inserted };

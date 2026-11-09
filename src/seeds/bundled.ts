@@ -177,13 +177,17 @@ export function citiesCsv(rows: readonly CityRecord[]): string {
 }
 
 export function categoriesCsv(rows: readonly CategoryRecord[]): string {
+  // The Specialty column only where a campaign uses it, so a list without
+  // one is written back exactly as it was.
+  const withSpecialty = rows.some((c) => c.specialty !== null && c.specialty !== undefined);
   return csv(
-    ['Name', 'Weight', 'Aliases', 'Active'],
+    ['Name', 'Weight', 'Aliases', 'Active', ...(withSpecialty ? ['Specialty'] : [])],
     rows.map((c) => [
       c.name,
       c.weight,
       c.aliases === null ? null : (JSON.parse(c.aliases) as string[]).join('|'),
       c.active === 1 ? 'yes' : 'no',
+      ...(withSpecialty ? [c.specialty ?? null] : []),
     ]),
   );
 }

@@ -1,0 +1,53 @@
+Google category,Libellé,Spécialité,Exclure
+Hair salon,Salon de coiffure,Coiffure,
+Hairdresser,Coiffeur,Coiffure,
+Hair extension technician,Extensions de cheveux,Coiffure,
+Barber shop,Barbier,Barbier,
+Nail salon,Onglerie,Onglerie,
+Beauty salon,Institut de beauté,,
+Beautician,Esthéticienne,Esthétique,
+Eyelash salon,Extension de cils,Esthétique,
+Eyebrow bar,Bar à sourcils,Esthétique,
+Waxing hair removal service,Épilation,Esthétique,
+Hair removal service,Épilation,Esthétique,
+Laser hair removal service,Épilation définitive,Esthétique,
+Facial spa,Soin du visage,Esthétique,
+Skin care clinic,Soins de la peau,Esthétique,
+Make-up artist,Maquilleuse,Maquillage,
+Makeup artist,Maquilleuse,Maquillage,
+Massage therapist,Masseur,Massage,
+Massage spa,Spa de massage,Massage,
+Thai massage therapist,Massage thaï,Massage,
+Day spa,Spa,Massage,
+Spa,Spa,Massage,
+Hammam,Hammam,Massage,
+Reflexologist,Réflexologue,Massage,
+Beauty supply store,Magasin de beauté,,Magasin (pas un salon)
+Cosmetics store,Parfumerie,,Magasin (pas un salon)
+Perfume store,Parfumerie,,Magasin (pas un salon)
+Hair extensions supplier,Fournisseur d'extensions,,Magasin (pas un salon)
+Wig shop,Perruques,,Magasin (pas un salon)
+Beauty school,École de beauté,,École
+Barber school,École de barbier,,École
+Hairdressing school,École de coiffure,,École
+Tattoo shop,Tatouage,,Tatouage / piercing
+Tattoo artist,Tatoueur,,Tatouage / piercing
+Tattoo removal service,Détatouage,,Tatouage / piercing
+Body piercing shop,Piercing,,Tatouage / piercing
+Piercing shop,Piercing,,Tatouage / piercing
+Plastic surgeon,Chirurgien esthétique,,Esthétique médicale
+Plastic surgery clinic,Clinique esthétique,,Esthétique médicale
+Medical spa,Médecine esthétique,,Esthétique médicale
+Dermatologist,Dermatologue,,Esthétique médicale
+Doctor,Médecin,,Esthétique médicale
+Medical clinic,Clinique,,Esthétique médicale
+Hotel,Hôtel,,Spa d'hôtel ou thalasso
+Resort hotel,Hôtel,,Spa d'hôtel ou thalasso
+Thalassotherapy centre,Thalassothérapie,,Spa d'hôtel ou thalasso
+Adult entertainment club,,,Massage érotique
+Adult entertainment store,,,Massage érotique
+Physiotherapist,Kinésithérapeute,,Paramédical
+Osteopath,Ostéopathe,,Paramédical
+Podiatrist,Pédicure-podologue,,Paramédical
+Gym,Salle de sport,,Pas un métier Gobadiz
+Fitness center,Salle de sport,,Pas un métier Gobadiz
