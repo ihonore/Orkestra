@@ -210,6 +210,30 @@ export class BrowserPool {
     };
   }
 
+  /**
+   * {@link close}, but never wait on it for longer than `ms`.
+   *
+   * Playwright's close asks Chromium to quit and then waits for the process
+   * to exit, with no time limit. Seen live on a Mac: a finished scrape sat for
+   * eleven minutes with Chromium idle and never exiting, so the task never
+   * ended and autopilot, seeing it still running, never started another.
+   * Returns whether the browser closed; when it did not, the caller exits the
+   * process, which closes Chromium's control pipe — and the next run sweeps
+   * up anything still left.
+   */
+  async closeWithin(ms: number): Promise<boolean> {
+    let timer: NodeJS.Timeout | undefined;
+    const timeout = new Promise<false>((resolve) => {
+      timer = setTimeout(() => resolve(false), ms);
+      timer.unref();
+    });
+    try {
+      return await Promise.race([this.close().then(() => true as const), timeout]);
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
   /** Close every context and the browser. Safe to call more than once. */
   async close(): Promise<void> {
     this.#closing = true;

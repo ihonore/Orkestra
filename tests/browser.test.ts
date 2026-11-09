@@ -1,4 +1,5 @@
 import { readFile } from 'node:fs/promises';
+import { BrowserPool } from '../src/core/browser/pool.js';
 import { describe, expect, it } from 'vitest';
 import { AdaptiveConcurrency, detectBlock } from '../src/core/browser/block-detector.js';
 import { consentCacheKey, isConsentUrl } from '../src/core/browser/consent.js';
@@ -339,5 +340,22 @@ describe('shutdown', () => {
     expect(process.listenerCount('SIGBREAK')).toBe(before + 1);
     controller.uninstall();
     expect(process.listenerCount('SIGBREAK')).toBe(before);
+  });
+});
+
+describe('closing the browser', () => {
+  it('gives up waiting on a browser that never quits', async () => {
+    class StuckPool extends BrowserPool {
+      override close(): Promise<void> {
+        return new Promise(() => undefined);
+      }
+    }
+    const started = Date.now();
+    expect(await new StuckPool().closeWithin(50)).toBe(false);
+    expect(Date.now() - started).toBeLessThan(1_000);
+  });
+
+  it('reports a normal close', async () => {
+    expect(await new BrowserPool().closeWithin(1_000)).toBe(true);
   });
 });

@@ -382,8 +382,20 @@ export async function runRun(options: RunCommandOptions): Promise<void> {
     }
   } finally {
     shutdown.uninstall();
-    await pool.close();
+    const closed = await pool.closeWithin(BROWSER_CLOSE_LIMIT_MS);
     if (driver.open) driver.close();
     shutdown.exitWhenIdle();
+    if (!closed) {
+      // The work is done and saved; only Chromium is refusing to go. Waiting
+      // on it would keep this task "running" forever.
+      logger.warn(
+        { waitedMs: BROWSER_CLOSE_LIMIT_MS },
+        'browser did not close; exiting without it',
+      );
+      process.exit(process.exitCode ?? 0);
+    }
   }
 }
+
+/** How long a finished run waits for Chromium to quit. It normally takes a second. */
+const BROWSER_CLOSE_LIMIT_MS = 20_000;
