@@ -87,6 +87,9 @@ export async function runEnrichEmails(options: EnrichCommandOptions): Promise<vo
         wanted: qualified.wanted,
         excluded: qualified.excluded,
         sitesRetired: qualified.sitesRetired,
+        websitesMoved: qualified.relinked.moved,
+        notWebsites: qualified.relinked.notWebsites,
+        emailLinksDropped: qualified.relinked.linksDropped,
       },
       'leads qualified',
     );

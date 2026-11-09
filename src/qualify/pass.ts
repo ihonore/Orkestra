@@ -17,9 +17,11 @@
  *     number only grows, so an export can send each lead exactly once, in the
  *     order they became ready — including those with no email at all.
  */
+import { domainOf } from '../automations/google-maps/normalize.js';
 import type { ResolvedConfig } from '../config/schema.js';
 import { resolvePath } from '../core/util/paths.js';
 import type { SqliteDriver } from '../db/driver/types.js';
+import { relinkWebsites, type RelinkReport } from './relink.js';
 import { fold, loadRules, qualify, type QualifyRules } from './rules.js';
 
 export interface QualifyReport {
@@ -206,6 +208,24 @@ export function runQualification(driver: SqliteDriver, rules: QualifyRules): Qua
   }, 'immediate');
 }
 
+export interface CampaignQualifyReport extends QualifyReport {
+  readonly relinked: RelinkReport;
+}
+
+/**
+ * The full pass for a campaign: websites filed under today's rules first
+ * (see `relink.ts`), so the chain check and the crawl queue see them right,
+ * then the qualification.
+ */
+export function qualifyCampaign(
+  driver: SqliteDriver,
+  config: ResolvedConfig,
+): CampaignQualifyReport {
+  const rules = rulesFromConfig(config);
+  const relinked = relinkWebsites(driver, domainOf);
+  return { ...runQualification(driver, rules), relinked };
+}
+
 /**
  * Qualify when the campaign asks for it, and say so; do nothing otherwise.
  * Called at the start of every email crawl and export.
@@ -213,7 +233,7 @@ export function runQualification(driver: SqliteDriver, rules: QualifyRules): Qua
 export function qualifyIfEnabled(
   driver: SqliteDriver,
   config: ResolvedConfig,
-): QualifyReport | null {
+): CampaignQualifyReport | null {
   if (!config.qualify.enabled) return null;
-  return runQualification(driver, rulesFromConfig(config));
+  return qualifyCampaign(driver, config);
 }

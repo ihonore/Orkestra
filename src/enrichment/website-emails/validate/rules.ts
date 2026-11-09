@@ -185,6 +185,7 @@ const VENDOR_DOMAINS: readonly RegExp[] = [
   /(^|\.)treatwell\.[a-z.]+$/i,
   /(^|\.)fresha\.com$/i,
   /(^|\.)booksy\.com$/i,
+  /(^|\.)(?:resalib\.(?:fr|com)|setmore\.com|reservio\.com|simplybook\.(?:me|it)|uala\.(?:fr|it|com)|sumup(?:bookings)?\.com|kalendes\.com|dybys\.com|flexybeauty\.com|iddan\.fr|dylentab\.fr|dikidi\.net|rdv360\.com|smartbooker\.fr|bookinbeautiful\.fr|kiute\.com|salonkee\.(?:fr|com)|clicrdv\.com|vagaro\.com|glaura\.(?:fr|ai)|iwana\.fr|wavy\.fr|sur-rdv\.com)$/i,
   // Consumer mediators, which French sites must name: the mediator's address.
   /(^|\.)(?:cm2c\.net|medicys\.fr|anm-conso\.com)$/i,
   /(^|\.)[a-z0-9-]*mediat(?:eur|ion)[a-z0-9-]*\.(?:fr|eu)$/i,

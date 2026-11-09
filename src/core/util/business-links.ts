@@ -40,7 +40,31 @@ export const BOOKING_PLATFORMS: Readonly<Record<string, string>> = {
   'clicrdv.com': 'ClicRDV',
   'calendly.com': 'Calendly',
   'simplybook.me': 'SimplyBook',
+  'simplybook.it': 'SimplyBook',
   'vagaro.com': 'Vagaro',
+  // Found as salons' "websites" across Paris, November 2026. Each was shared
+  // by several unrelated salons and so mistaken for a chain's site.
+  'trea.tw': 'Treatwell',
+  'uala.fr': 'Uala',
+  'setmore.com': 'Setmore',
+  'reservio.com': 'Reservio',
+  'resalib.fr': 'Resalib',
+  'sumupbookings.com': 'SumUp',
+  'kalendes.com': 'Kalendes',
+  'dybys.com': 'Dybys',
+  'flexybeauty.com': 'Flexy',
+  'bookinbeautiful.fr': 'Bookinbeautiful',
+  'iddan.fr': 'Iddan',
+  'dylentab.fr': 'Dylentab',
+  'dikidi.net': 'Dikidi',
+  'rdv360.com': 'RDV360',
+  'smartbooker.fr': 'Smartbooker',
+  'sur-rdv.com': 'Sur-rdv',
+  'glaura.ai': 'Glaura',
+  'wavy.fr': 'Wavy',
+  'as.me': 'Acuity',
+  'acuityscheduling.com': 'Acuity',
+  'squareup.com': 'Square',
 };
 
 /** What a salon's online booking goes through when it is its own website. */
@@ -166,6 +190,27 @@ export function signalsFrom(
     bookingProvider: ordered.length > 0 ? ordered.join(', ') : null,
     bookingUrl: first === undefined ? null : (providers.get(first) ?? null),
   };
+}
+
+/**
+ * Join booking-provider lists ("Planity, setmore.com") into one, naming any
+ * provider stored by its domain before {@link BOOKING_PLATFORMS} knew it,
+ * named platforms first, each once. Null when there are none.
+ */
+export function mergeProviders(...lists: readonly (string | null | undefined)[]): string | null {
+  const providers = new Set<string>();
+  for (const list of lists) {
+    for (const token of (list ?? '').split(',')) {
+      const provider = token.trim();
+      if (provider !== '') providers.add(bookingPlatformOf(provider) ?? provider);
+    }
+  }
+  const names = new Set(Object.values(BOOKING_PLATFORMS));
+  const ordered = [
+    ...[...providers].filter((p) => names.has(p)),
+    ...[...providers].filter((p) => !names.has(p)),
+  ];
+  return ordered.length > 0 ? ordered.join(', ') : null;
 }
 
 /**

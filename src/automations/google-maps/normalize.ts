@@ -123,6 +123,18 @@ const NON_WEBSITE_DOMAINS = new Set([
   'beacons.ai',
   'lnk.bio',
   'taplink.cc',
+  // A chat or a short link, not a site.
+  'wa.me',
+  'whatsapp.com',
+  'page.link',
+  'bit.ly',
+  // Directories that list the business among thousands of others.
+  'pagesjaunes.fr',
+  'groupon.fr',
+  'frmaps.xyz',
+  'ivof.com',
+  'iarabeauty.com',
+  'reservationcoiffeur.fr',
 ]);
 
 /**
@@ -160,6 +172,11 @@ const SITE_BUILDER_SUFFIXES = new Set([
   'netlify.app',
   'lovable.app',
   'github.io',
+  'now.site',
+  'book.fr',
+  'site-solocal.com',
+  'eatbu.com',
+  'odoo.com',
 ]);
 
 export interface DomainInfo {

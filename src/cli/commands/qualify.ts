@@ -7,7 +7,7 @@
  */
 import type { ResolvedConfig } from '../../config/schema.js';
 import { openDatabaseFromConfig } from '../../db/client.js';
-import { rulesFromConfig, runQualification } from '../../qualify/pass.js';
+import { qualifyCampaign, rulesFromConfig } from '../../qualify/pass.js';
 import { heading, keyValue, style, symbol } from '../output.js';
 
 export interface QualifyCommandOptions {
@@ -25,10 +25,11 @@ export function runQualify(options: QualifyCommandOptions): void {
     return;
   }
 
-  const rules = rulesFromConfig(config);
+  // Read before opening the database, so a broken rules file says so plainly.
+  rulesFromConfig(config);
   const driver = openDatabaseFromConfig(config);
   try {
-    const report = runQualification(driver, rules);
+    const report = qualifyCampaign(driver, config);
     if (options.json === true) {
       console.log(JSON.stringify(report, null, 2));
       return;
@@ -46,6 +47,15 @@ export function runQualify(options: QualifyCommandOptions): void {
           : []),
         ...(report.sitesRestored > 0
           ? ([['sites back in the queue', String(report.sitesRestored)]] as [string, string][])
+          : []),
+        ...(report.relinked.moved > 0 || report.relinked.notWebsites > 0
+          ? ([
+              [
+                'websites refiled',
+                `${report.relinked.moved} moved, ${report.relinked.notWebsites} not a website, ` +
+                  `${report.relinked.linksDropped} email links dropped`,
+              ],
+            ] as [string, string][])
           : []),
       ]),
     );

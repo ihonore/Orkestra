@@ -70,6 +70,12 @@ folder. Edit them, then run `qualify` again: the change applies to everything al
 
 These are also left out:
 - **Chains no list names.** Three or more listings sharing one website are treated as a chain.
+  A booking page (Setmore, Reservio, SimplyBook…), a WhatsApp or short link, or a directory
+  page is not a website, and neither is a site builder's host: each `salon.now.site` is its own
+  site. When one of these turns up as a false chain, add it to `BOOKING_PLATFORMS`
+  (`src/core/util/business-links.ts`), `NON_WEBSITE_DOMAINS` or `SITE_BUILDER_SUFFIXES`
+  (`src/automations/google-maps/normalize.ts`). The next qualification re-files every salon
+  already found.
 - **Closed salons.** Listings marked permanently closed.
 
 Laser hair removal is **kept**: the Gobadiz catalogue offers "Épilation définitive (laser, lumière
