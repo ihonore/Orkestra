@@ -36,6 +36,33 @@ export function moduleDir(importMetaUrl: string): string {
 }
 
 /**
+ * The package root: the folder holding `package.json`, `migrations/`, `seeds/`
+ * and `campaigns/`.
+ *
+ * Resolved from this module rather than the working directory, because `gms`
+ * runs from anywhere, under tsx (src/core/util) or from dist (dist/core/util),
+ * and both sit three levels below the root.
+ */
+export function packageRoot(): string {
+  return path.resolve(moduleDir(import.meta.url), '..', '..', '..');
+}
+
+/**
+ * The folder of a named campaign: `<package>/campaigns/<name>`.
+ *
+ * The name is a single folder name, never a path, so `--campaign ../x` cannot
+ * point outside `campaigns/`.
+ */
+export function campaignDir(name: string, root: string = packageRoot()): string {
+  if (!/^[A-Za-z0-9][A-Za-z0-9_-]*$/.test(name)) {
+    throw new Error(
+      `"${name}" is not a campaign name: use letters, digits, - and _ (a folder under campaigns/)`,
+    );
+  }
+  return path.join(root, 'campaigns', name);
+}
+
+/**
  * Display form of a path: forward slashes, home collapsed to `~`.
  * For log lines and CLI output only — never feed this back into the filesystem.
  */

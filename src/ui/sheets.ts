@@ -18,6 +18,22 @@ export function defaultCredentialsDir(): string {
 export const KEY_FILE_NAME = 'gms-exporter.json';
 
 /**
+ * The key's file name for a project.
+ *
+ * The default project keeps the original name, so an existing install's
+ * config line stays valid. Any other project — a campaign — gets its own, so
+ * uploading one campaign's key cannot overwrite another's.
+ */
+export function keyFileName(projectName: string): string {
+  if (projectName === 'gms') return KEY_FILE_NAME;
+  const safe = projectName
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+  return safe === '' ? KEY_FILE_NAME : `${safe}-exporter.json`;
+}
+
+/**
  * The spreadsheet id, from either the id itself or any URL of the sheet —
  * `/edit#gid=0`, `/edit?usp=sharing`, a `/copy` link. People paste the URL.
  */
@@ -86,9 +102,13 @@ export function parseServiceAccountKey(text: string): { clientEmail: string } {
  * key in place of a working one. The mode is a real restriction on macOS and
  * Linux; on Windows the user's home folder is already private to them.
  */
-export function saveServiceAccountKey(text: string, dir: string): string {
+export function saveServiceAccountKey(
+  text: string,
+  dir: string,
+  fileName: string = KEY_FILE_NAME,
+): string {
   fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
-  const target = path.join(dir, KEY_FILE_NAME);
+  const target = path.join(dir, fileName);
   const temp = `${target}.tmp`;
   fs.writeFileSync(temp, text, { encoding: 'utf8', mode: 0o600 });
   fs.renameSync(temp, target);

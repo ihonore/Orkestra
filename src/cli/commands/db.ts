@@ -66,13 +66,15 @@ export function runDbMigrate(options: DbCommandOptions & { dryRun: boolean }): v
 
     // A new database starts with the committed city and service lists, so a
     // fresh checkout — on the VPS or anywhere else — can plan straight away.
-    const seeded = loadBundledSeedsOnce(driver);
+    const seeded = loadBundledSeedsOnce(driver, options.config.paths.seedsDir);
     if (seeded !== null) {
       const parts = [
         seeded.cities !== null ? `${seeded.cities.result.inserted} cities` : null,
         seeded.categories !== null ? `${seeded.categories.result.inserted} services` : null,
       ].filter((part) => part !== null);
-      console.log(`${symbol.ok} loaded ${parts.join(' and ')} from seeds/`);
+      console.log(
+        `${symbol.ok} loaded ${parts.join(' and ')} from ${displayPath(options.config.paths.seedsDir)}`,
+      );
     }
 
     // Businesses saved before the extraction fix may carry another place's

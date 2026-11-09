@@ -165,6 +165,7 @@ export class TaskManager {
     };
     child.stdout?.on('data', append);
     child.stderr?.on('data', append);
+    keepAwakeWhile(child);
 
     child.on('error', (error) => {
       task.lines.push(`failed to start: ${error.message}`);
@@ -290,4 +291,25 @@ export function cliEntryPoint(): string {
     throw new Error(`cannot find the CLI entry point at ${entry}`);
   }
   return entry;
+}
+
+/**
+ * On a Mac, stop the machine sleeping while a task runs.
+ *
+ * A laptop that idles to sleep mid-scrape freezes the browser and lets the job
+ * leases expire. `caffeinate -w` holds an idle-sleep assertion exactly as long
+ * as the given process lives, so nothing has to remember to release it. Other
+ * platforms, or a Mac without the tool, run the task as before.
+ */
+export function keepAwakeWhile(
+  child: ChildProcess,
+  platform: NodeJS.Platform = process.platform,
+): ChildProcess | null {
+  if (platform !== 'darwin' || child.pid === undefined) return null;
+  const guard = spawn('caffeinate', ['-i', '-w', String(child.pid)], { stdio: 'ignore' });
+  guard.on('error', () => {
+    // No caffeinate: the task still runs, the Mac may just sleep.
+  });
+  guard.unref();
+  return guard;
 }

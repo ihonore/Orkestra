@@ -8,7 +8,7 @@
 import type { ResolvedConfig } from '../../config/schema.js';
 import { displayPath } from '../../core/util/paths.js';
 import { openDatabaseFromConfig } from '../../db/client.js';
-import { bundledSeedsDir, loadBundledSeeds, saveSeedFiles } from '../../seeds/bundled.js';
+import { loadBundledSeeds, saveSeedFiles } from '../../seeds/bundled.js';
 import { heading, keyValue, style, symbol } from '../output.js';
 
 export interface SeedsCommandOptions {
@@ -19,13 +19,14 @@ export interface SeedsCommandOptions {
 export function runSeedsLoad(options: SeedsCommandOptions): void {
   const driver = openDatabaseFromConfig(options.config);
   try {
-    const result = loadBundledSeeds(driver);
+    const dir = options.config.paths.seedsDir;
+    const result = loadBundledSeeds(driver, { dir });
     if (options.json === true) {
       console.log(JSON.stringify(result, null, 2));
       return;
     }
     if (result.cities === null && result.categories === null) {
-      console.log(`${symbol.warn} no seed files in ${displayPath(bundledSeedsDir())}`);
+      console.log(`${symbol.warn} no seed files in ${displayPath(dir)}`);
       return;
     }
 
@@ -61,7 +62,7 @@ export function runSeedsLoad(options: SeedsCommandOptions): void {
 export function runSeedsSave(options: SeedsCommandOptions): void {
   const driver = openDatabaseFromConfig(options.config, { readonly: true });
   try {
-    const result = saveSeedFiles(driver);
+    const result = saveSeedFiles(driver, options.config.paths.seedsDir);
     if (options.json === true) {
       console.log(JSON.stringify(result, null, 2));
       return;
@@ -70,7 +71,7 @@ export function runSeedsSave(options: SeedsCommandOptions): void {
       `${symbol.ok} wrote ${result.cities} cities and ${result.categories} services to ${displayPath(result.dir)}`,
     );
     console.log(
-      style.grey('\nCommit the seeds/ folder so a fresh install starts from these lists.'),
+      style.grey(`\nCommit ${displayPath(result.dir)} so a fresh install starts from these lists.`),
     );
   } finally {
     driver.close();

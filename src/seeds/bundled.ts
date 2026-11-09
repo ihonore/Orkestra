@@ -16,7 +16,7 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
-import { moduleDir } from '../core/util/paths.js';
+import { packageRoot } from '../core/util/paths.js';
 import type { SqliteDriver } from '../db/driver/types.js';
 import { MetaRepository } from '../db/repositories/meta.js';
 import {
@@ -47,8 +47,7 @@ const LOADED_KEY = 'bundled_seeds_loaded_at';
  * reason as the migrations: `gms` runs from anywhere, under tsx or from dist.
  */
 export function bundledSeedsDir(): string {
-  // src/seeds/bundled.ts -> ../../seeds ; dist/seeds/bundled.js -> ../../seeds
-  return path.resolve(moduleDir(import.meta.url), '..', '..', 'seeds');
+  return path.join(packageRoot(), 'seeds');
 }
 
 export interface LoadedFile {

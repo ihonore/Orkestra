@@ -1,0 +1,25 @@
+# Gobadiz — beauty professionals in France.
+#
+# Run this campaign with:   gms --campaign gobadiz <command>
+#                      or:  npm run gobadiz   (the dashboard, on port 4601)
+#
+# Everything here applies on top of the built-in defaults, exactly like the
+# main gms.config.yaml. This campaign has its own database (./data), its own
+# lists (./seeds) and its own Google Sheet; nothing is shared with the main
+# campaign. Personal values — the sheet id, the key file — go in
+# gms.config.local.yaml next to this file (git-ignored), which is also where
+# the dashboard saves them.
+
+project:
+  name: gobadiz
+  # Relative to this folder; git-ignored like the main data/.
+  dataDir: ./data
+
+seeds:
+  dir: ./seeds
+
+ui:
+  port: 4601
+
+browser:
+  timezoneId: Europe/Paris

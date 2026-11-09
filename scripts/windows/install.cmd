@@ -209,6 +209,14 @@ if (-not (Test-Path $database) -and (Test-Path $backup)) {
 
 Step 'Preparing the database'
 Invoke-Native 'node' @('dist\cli\main.js', 'db', 'migrate')
+# Each campaign under campaigns\ has its own database and lists.
+$campaigns = Join-Path $InstallDir 'campaigns'
+if (Test-Path $campaigns) {
+  Get-ChildItem -Directory $campaigns | Where-Object { Test-Path (Join-Path $_.FullName 'gms.config.yaml') } | ForEach-Object {
+    Step "Preparing the $($_.Name) campaign's database"
+    Invoke-Native 'node' @('dist\cli\main.js', '--campaign', $_.Name, 'db', 'migrate')
+  }
+}
 
 # `gms` on PATH for anyone who prefers the terminal. Not essential.
 & npm.cmd link --no-audit --no-fund *> $null

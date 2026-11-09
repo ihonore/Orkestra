@@ -40,6 +40,7 @@ export function runConfigShow(options: ConfigShowOptions): void {
       ['root', displayPath(paths.root)],
       ['dataDir', displayPath(paths.dataDir)],
       ['database', displayPath(paths.databaseFile)],
+      ['seeds', displayPath(paths.seedsDir)],
       ['logs', displayPath(paths.logsDir)],
       ['artifacts', displayPath(paths.artifactsDir)],
       ['exports', displayPath(paths.exportsDir)],

@@ -654,7 +654,7 @@ describe('google sheets settings', () => {
     // The private key never travels back to the page.
     expect(body).not.toContain('PRIVATE KEY');
 
-    const file = path.join(root, 'credentials', 'gms-exporter.json');
+    const file = path.join(root, 'credentials', 'test-exporter.json');
     expect(fs.readFileSync(file, 'utf8')).toBe(KEY);
     if (process.platform !== 'win32') expect(fs.statSync(file).mode & 0o077).toBe(0);
     expect(await settings(url)).toMatchObject({

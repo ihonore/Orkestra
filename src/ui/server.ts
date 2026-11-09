@@ -28,6 +28,7 @@ import {
   parseSpreadsheetId,
   portablePath,
   saveServiceAccountKey,
+  keyFileName,
 } from './sheets.js';
 import { openDatabaseFromConfig } from '../db/client.js';
 import { JobsRepository } from '../db/repositories/jobs.js';
@@ -475,10 +476,23 @@ function readBody(req: http.IncomingMessage, done: (body: unknown) => void): voi
   });
 }
 
+/**
+ * The page, named after the project, so two campaigns' dashboards open side by
+ * side can be told apart at a glance — in the tab title and the sidebar.
+ */
+export function brandPage(html: string, name: string): string {
+  if (name === 'gms') return html;
+  const safe = name.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
+  return html
+    .replace('<title>gms · sweep</title>', `<title>${safe} · sweep</title>`)
+    .replace('<div class="brand">gms<span>.</span>', `<div class="brand">${safe}<span>.</span>`);
+}
+
 export function startUiServer(options: UiServerOptions): Promise<RunningServer> {
   const { config } = options;
   const host = options.host ?? '127.0.0.1';
-  const port = options.port ?? 4600;
+  const port = options.port ?? config.ui.port;
+  const page = brandPage(PAGE, config.project.name);
 
   const tasks =
     options.allowControl === true
@@ -594,7 +608,7 @@ export function startUiServer(options: UiServerOptions): Promise<RunningServer> 
           'cache-control': 'no-store',
           'x-frame-options': 'DENY',
         });
-        res.end(PAGE);
+        res.end(page);
         return;
       }
 
@@ -1053,6 +1067,7 @@ export function startUiServer(options: UiServerOptions): Promise<RunningServer> 
             const file = saveServiceAccountKey(
               text,
               options.credentialsDir ?? defaultCredentialsDir(),
+              keyFileName(config.project.name),
             );
             const result = writeLocalConfig(
               config,
@@ -1091,7 +1106,7 @@ export function startUiServer(options: UiServerOptions): Promise<RunningServer> 
         json(
           res,
           200,
-          withDb((d) => saveSeedFiles(d, options.seedsDir)),
+          withDb((d) => saveSeedFiles(d, options.seedsDir ?? config.paths.seedsDir)),
         );
         return;
       }

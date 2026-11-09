@@ -17,7 +17,7 @@ import path from 'node:path';
 import { parse as parseYaml } from 'yaml';
 import type { z } from 'zod';
 import { ConfigError } from '../core/errors/taxonomy.js';
-import { displayPath, resolvePath } from '../core/util/paths.js';
+import { displayPath, packageRoot, resolvePath } from '../core/util/paths.js';
 import { readEnvLayer } from './env.js';
 import { redactSecrets } from './redact.js';
 import { ConfigSchema, type ConfigSource, type ResolvedConfig } from './schema.js';
@@ -224,6 +224,10 @@ export function loadConfig(options: LoadConfigOptions = {}): ResolvedConfig {
     paths: {
       root,
       dataDir,
+      seedsDir:
+        validated.seeds.dir === undefined
+          ? path.join(packageRoot(), 'seeds')
+          : resolvePath(validated.seeds.dir, root),
       databaseFile: resolvePath(validated.database.file, dataDir),
       logsDir: path.join(dataDir, 'logs'),
       artifactsDir: path.join(dataDir, 'artifacts'),

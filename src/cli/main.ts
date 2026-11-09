@@ -7,12 +7,14 @@
  * `src/config` so the forthcoming HTTP API can expose the same operations
  * without going through argv.
  */
-import { realpathSync } from 'node:fs';
+import { existsSync, realpathSync } from 'node:fs';
+import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { Command, InvalidArgumentError, Option } from 'commander';
 import { loadConfig } from '../config/loader.js';
 import type { LogLevel, ResolvedConfig } from '../config/schema.js';
 import { errorMessage, isAppError } from '../core/errors/taxonomy.js';
+import { campaignDir, displayPath } from '../core/util/paths.js';
 import { listenForParentStop } from '../core/engine/shutdown.js';
 import { APP_VERSION } from '../version.js';
 import { runConfigShow } from './commands/config.js';
@@ -34,6 +36,7 @@ import type { GroupingName } from '../db/repositories/progress.js';
 
 interface GlobalOptions {
   readonly config?: string;
+  readonly campaign?: string;
   readonly logLevel?: LogLevel;
   readonly dataDir?: string;
 }
@@ -52,8 +55,36 @@ function configFrom(program: Command): ResolvedConfig {
 
   return loadConfig({
     ...(options.config !== undefined ? { configFile: options.config } : {}),
+    ...(options.campaign !== undefined ? { cwd: campaignRoot(options) } : {}),
     overrides,
   });
+}
+
+/**
+ * The folder `--campaign <name>` runs from.
+ *
+ * A campaign is used exactly as if gms had been started inside its folder:
+ * its `gms.config.yaml`, its `gms.config.local.yaml` (where the dashboard
+ * saves settings) and its data directory. Tasks the dashboard starts run in
+ * the same folder, so they pick up the same campaign with no flag to forward.
+ */
+function campaignRoot(options: GlobalOptions): string {
+  const name = options.campaign ?? '';
+  if (options.config !== undefined) {
+    throw new InvalidArgumentError('use --campaign or --config, not both');
+  }
+  let dir: string;
+  try {
+    dir = campaignDir(name);
+  } catch (error) {
+    throw new InvalidArgumentError(errorMessage(error));
+  }
+  if (!existsSync(path.join(dir, 'gms.config.yaml'))) {
+    throw new InvalidArgumentError(
+      `no campaign "${name}": ${displayPath(path.join(dir, 'gms.config.yaml'))} does not exist`,
+    );
+  }
+  return dir;
 }
 
 const JOB_STATUS_CHOICES: readonly string[] = [
@@ -120,6 +151,10 @@ export function buildProgram(): Command {
     .description('Modular web automation platform. Google Maps lead extraction is automation #1.')
     .version(APP_VERSION, '-v, --version')
     .option('-c, --config <path>', 'path to a config file (default: ./gms.config.yaml)')
+    .option(
+      '--campaign <name>',
+      'run a campaign from campaigns/<name>/ (its own config, lists and database)',
+    )
     .option('--data-dir <path>', 'override project.dataDir')
     .addOption(
       new Option('--log-level <level>', 'override logging.level').choices([
@@ -426,7 +461,7 @@ export function buildProgram(): Command {
   program
     .command('ui')
     .description('open the local dashboard — run everything from a browser')
-    .option('-p, --port <n>', 'port to listen on', toInt, 4600)
+    .option('-p, --port <n>', 'port to listen on (default: ui.port, 4600)', toInt)
     .option('--no-open', 'do not open a browser window')
     // No `-c` short form: the program's own `-c, --config <path>` shadows it, so
     // `gms ui -c` fails asking for a config path and `gms ui -c x.yaml` starts a
@@ -440,7 +475,7 @@ export function buildProgram(): Command {
     .option('--allow-config-write', 'edit settings only, without task controls', false)
     .action(
       async (options: {
-        port: number;
+        port?: number;
         open: boolean;
         control: boolean;
         allowConfigWrite: boolean;
@@ -448,7 +483,7 @@ export function buildProgram(): Command {
         const globals = program.opts<GlobalOptions>();
         await runUi({
           config: configFrom(program),
-          port: options.port,
+          ...(options.port !== undefined && { port: options.port }),
           open: options.open,
           // --control implies settings editing: someone who can start a scrape
           // can already change how it runs.

@@ -18,11 +18,13 @@
   "files": [
     "dist",
     "migrations",
-    "seeds"
+    "seeds",
+    "campaigns"
   ],
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
     "gms": "tsx src/cli/main.ts",
+    "gobadiz": "tsx src/cli/main.ts --campaign gobadiz ui --control",
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",

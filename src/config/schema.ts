@@ -33,6 +33,31 @@ export const ProjectSchema = z
   })
   .strict();
 
+/**
+ * Where the city and service lists for this config live.
+ *
+ * Unset means the `seeds/` folder shipped beside `migrations/`, which is the
+ * US campaign's. A campaign folder points this at its own lists so that
+ * `db migrate`, `seeds load|save` and the dashboard never touch another
+ * campaign's files. Relative paths resolve against the config file's folder.
+ */
+export const SeedsSchema = z
+  .object({
+    dir: z.string().min(1).optional(),
+  })
+  .strict();
+
+/** The local dashboard. */
+export const UiSchema = z
+  .object({
+    /**
+     * Port `gms ui` listens on when `-p` is not given. Two campaigns on one
+     * machine each need their own, or the second dashboard cannot start.
+     */
+    port: z.number().int().min(1).max(65_535).default(4600),
+  })
+  .strict();
+
 export const DatabaseSchema = z
   .object({
     /** Only `sqlite` is implemented. `postgres` is a deliberate future option. */
@@ -302,6 +327,8 @@ export const ConfigSchema = z
     // omitted section still has each of its own field defaults applied. A plain
     // `.default({})` would demand a fully-populated object here.
     project: ProjectSchema.prefault({}),
+    seeds: SeedsSchema.prefault({}),
+    ui: UiSchema.prefault({}),
     database: DatabaseSchema.prefault({}),
     logging: LoggingSchema.prefault({}),
     runtime: RuntimeSchema.prefault({}),
@@ -367,6 +394,8 @@ export interface ResolvedConfig extends ValidatedConfig {
     /** Directory containing the config file, or cwd when there is none. */
     readonly root: string;
     readonly dataDir: string;
+    /** The city and service lists: `seeds.dir`, else the bundled `seeds/`. */
+    readonly seedsDir: string;
     readonly databaseFile: string;
     readonly logsDir: string;
     readonly artifactsDir: string;
