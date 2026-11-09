@@ -1,6 +1,7 @@
 import { readFile } from 'node:fs/promises';
+import { chromium, type Browser } from 'playwright';
 import { BrowserPool } from '../src/core/browser/pool.js';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { AdaptiveConcurrency, detectBlock } from '../src/core/browser/block-detector.js';
 import { consentCacheKey, isConsentUrl } from '../src/core/browser/consent.js';
 import { jitter, randomViewport, scrollBurst } from '../src/core/browser/humanize.js';
@@ -357,5 +358,37 @@ describe('closing the browser', () => {
 
   it('reports a normal close', async () => {
     expect(await new BrowserPool().closeWithin(1_000)).toBe(true);
+  });
+
+  it('launches one browser when every worker starts at once', async () => {
+    // Four workers lease their first page together. Each used to find no
+    // browser and launch its own; the pool kept one, and the three it never
+    // closed kept the finished run alive.
+    let launches = 0;
+    let closes = 0;
+    const launch = vi.spyOn(chromium, 'launch').mockImplementation(async () => {
+      launches += 1;
+      await new Promise((r) => setTimeout(r, 20));
+      return {
+        close: () => {
+          closes += 1;
+          return Promise.resolve();
+        },
+      } as unknown as Browser;
+    });
+    try {
+      const pool = new BrowserPool();
+      await Promise.all([pool.start(), pool.start(), pool.start(), pool.start()]);
+      expect(launches).toBe(1);
+
+      // Closing while a launch is still under way closes what it brings up.
+      const late = new BrowserPool();
+      const starting = late.start();
+      await late.close();
+      await starting;
+      expect(closes).toBe(1);
+    } finally {
+      launch.mockRestore();
+    }
   });
 });
