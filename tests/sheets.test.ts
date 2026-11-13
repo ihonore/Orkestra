@@ -372,3 +372,139 @@ describe('the header row', () => {
     expect(mock.rows('Leads')).toHaveLength(2);
   });
 });
+
+describe('a tab the team works in', () => {
+  // The Gobadiz "Prospects" tab, in miniature: made before the view gained
+  // Département, with the team's Statut filled in.
+  const field = (name: string, blank = false): FieldDef => ({
+    name,
+    kind: name === 'Code postal' ? 'digits' : 'text',
+    ...(blank && { blank: true }),
+  });
+  const schema = {
+    entity: 'prospects',
+    fields: [
+      field('Nom'),
+      field('Catégorie'),
+      field('Département'),
+      field('Ville'),
+      field('Code postal'),
+      field('Statut', true),
+      field('Notes', true),
+    ],
+    sql: '',
+  };
+  const cell = (value: string) => ({ userEnteredValue: { stringValue: value } });
+  const line = (...values: string[]) => values.map((v) => (v === '' ? {} : cell(v)));
+  const fills = {
+    Département: {
+      from: ['Code postal'],
+      value: (cells: Readonly<Record<string, string>>) =>
+        cells['Code postal']?.startsWith('93') === true ? '93 – Seine-Saint-Denis' : '75 – Paris',
+    },
+  };
+  /** The tab as text, trailing blanks dropped as Google drops them. */
+  const text = (mock: MockSheets) =>
+    mock.rows('Prospects').map((row) => {
+      const out = row.map((c) => {
+        const value = (c as { userEnteredValue?: { stringValue?: string } }).userEnteredValue;
+        return value?.stringValue ?? '';
+      });
+      while (out.length > 0 && out[out.length - 1] === '') out.pop();
+      return out;
+    });
+
+  async function teamTab(
+    header: string[],
+    rows: string[][],
+    mode: 'check' | 'align' = 'align',
+  ): Promise<{ mock: MockSheets; sheets: SheetsExporter }> {
+    const mock = await startMockSheets({
+      existingTabs: [
+        {
+          title: 'Prospects',
+          sheetId: 9,
+          cols: header.length,
+          values: [line(...header), ...rows.map((r) => line(...r))],
+        },
+      ],
+    });
+    servers.push(mock);
+    const sheets = new SheetsExporter({
+      spreadsheetId: 'test-sheet',
+      sheetName: 'Prospects',
+      rootUrl: mock.url,
+      authOverride: 'test-key',
+      header: mode,
+      fills,
+    });
+    return { mock, sheets };
+  }
+
+  it('gains a new column in place, filled for its rows, the team’s notes untouched', async () => {
+    const { mock, sheets } = await teamTab(
+      ['Nom', 'Catégorie', 'Ville', 'Code postal', 'Statut', 'Notes'],
+      [
+        ['Nina Nails', 'Onglerie', 'Paris 11e', '75011', 'Rappeler', ''],
+        // The team sorted the tab: rows are matched by their own postcode.
+        ['Afro Queen', 'Coiffure', 'Montreuil', '93100', '', 'RDV mardi'],
+      ],
+    );
+    const room = await sheets.prepare(schema);
+    expect(room.header).toMatchObject({ added: ['Département'], filled: 2 });
+
+    await sheets.append(
+      [
+        {
+          Nom: 'Saint-Denis Braids',
+          Département: '93 – Seine-Saint-Denis',
+          'Code postal': '93200',
+        },
+      ],
+      schema,
+    );
+    expect(text(mock)).toEqual([
+      ['Nom', 'Catégorie', 'Département', 'Ville', 'Code postal', 'Statut', 'Notes'],
+      ['Nina Nails', 'Onglerie', '75 – Paris', 'Paris 11e', '75011', 'Rappeler'],
+      ['Afro Queen', 'Coiffure', '93 – Seine-Saint-Denis', 'Montreuil', '93100', '', 'RDV mardi'],
+      ['Saint-Denis Braids', '', '93 – Seine-Saint-Denis', '', '93200'],
+    ]);
+    // The new header cell looks like the others.
+    const header = mock.rows('Prospects')[0]![2] as { userEnteredFormat?: Record<string, unknown> };
+    expect(header.userEnteredFormat?.['textFormat']).toMatchObject({ bold: true });
+  });
+
+  it('writes by header name, so a column the team added stays theirs', async () => {
+    const { mock, sheets } = await teamTab(
+      ['Nom', 'Appelé par', 'Catégorie', 'Département', 'Ville', 'Code postal', 'Statut', 'Notes'],
+      [['Nina Nails', 'Enzo', 'Onglerie', '75 – Paris', 'Paris 11e', '75011', 'Rappeler', '']],
+    );
+    const room = await sheets.prepare(schema);
+    expect(room.header).toMatchObject({ added: [], extra: ['Appelé par'], reordered: false });
+
+    await sheets.append([{ Nom: 'Salon B', Catégorie: 'Barbier', Ville: 'Paris 12e' }], schema);
+    expect(text(mock)[2]).toEqual(['Salon B', '', 'Barbier', '', 'Paris 12e']);
+  });
+
+  it('only reports, and adds nothing, when the tab can be rebuilt instead', async () => {
+    const { mock, sheets } = await teamTab(
+      ['Nom', 'Catégorie', 'Ville', 'Code postal', 'Statut', 'Notes'],
+      [['Nina Nails', 'Onglerie', 'Paris 11e', '75011', '', '']],
+      'check',
+    );
+    const room = await sheets.prepare(schema);
+    expect(room.header).toMatchObject({ added: [], missing: ['Département'] });
+    expect(text(mock)[0]).toHaveLength(6);
+    expect(
+      mock.requests.some((r) => JSON.stringify(r.body ?? '').includes('insertDimension')),
+    ).toBe(false);
+  });
+
+  it('leaves a header cleared by hand alone: there is nothing to align to', async () => {
+    const { mock, sheets } = await teamTab([], [['Nina Nails', 'Onglerie']]);
+    expect((await sheets.prepare(schema)).header).toBeNull();
+    expect(
+      mock.requests.some((r) => JSON.stringify(r.body ?? '').includes('insertDimension')),
+    ).toBe(false);
+  });
+});

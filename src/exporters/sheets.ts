@@ -84,7 +84,60 @@ export interface SheetsExportOptions extends SheetsAuthOptions {
   readonly authOverride?: string;
   /** Create the tab if it is missing. */
   readonly createIfMissing?: boolean;
+  /**
+   * What to do with a tab that already has a header and rows. See
+   * {@link HeaderMode}; `ignore` when omitted.
+   */
+  readonly header?: HeaderMode;
+  /**
+   * How to fill a column `align` adds, for the rows already in the tab, from
+   * other cells of the same row. By column name.
+   */
+  readonly fills?: Readonly<Record<string, ColumnFill>>;
   readonly logger?: { info: (o: object, m: string) => void; warn: (o: object, m: string) => void };
+}
+
+/**
+ * How an existing tab's header is treated.
+ *
+ *  - `ignore`: rows go in by position, as they always have.
+ *  - `check`: the same, but {@link SheetsExporter.prepare} reports how the
+ *    header differs from the view's columns. For a tab that can be rebuilt.
+ *  - `align`: for a tab the team works in, which is never rebuilt. A column
+ *    the view has and the tab lacks is inserted where the view puts it —
+ *    everything to its right, the team's own columns included, moves with
+ *    its data — and filled for the rows already there. Rows then go in by
+ *    header name, so a column the team inserts stays theirs and nothing
+ *    shifts under it.
+ */
+export type HeaderMode = 'ignore' | 'check' | 'align';
+
+/** Fill a new column from other cells of the same row, by column name. */
+export interface ColumnFill {
+  readonly from: readonly string[];
+  readonly value: (cells: Readonly<Record<string, string>>) => string | null;
+}
+
+export interface HeaderReport {
+  /** View columns the tab lacked and now has. */
+  readonly added: readonly string[];
+  /** View columns the tab lacks (under `check`, nothing is added). */
+  readonly missing: readonly string[];
+  /** Columns of the tab the view does not have: the team's own. */
+  readonly extra: readonly string[];
+  /** The view's columns are all there, but not in the view's order. */
+  readonly reordered: boolean;
+  /** Rows already in the tab whose new columns were filled. */
+  readonly filled: number;
+}
+
+/** Column letters for a 0-based index: 0 is A, 26 is AA. */
+export function columnLetter(index: number): string {
+  let letters = '';
+  for (let n = index + 1; n > 0; n = Math.floor((n - 1) / 26)) {
+    letters = String.fromCharCode(65 + ((n - 1) % 26)) + letters;
+  }
+  return letters;
 }
 
 export interface AppendResult {
@@ -248,6 +301,11 @@ export class SheetsExporter {
   #sheetId: number | null = null;
   /** Rows the tab had when prepared, header included. */
   #rowCount = 0;
+  /**
+   * Under `align`, the view column each tab column holds, or null for one of
+   * the team's. Null here: rows go in by position.
+   */
+  #columns: (FieldDef | null)[] | null = null;
 
   constructor(private readonly options: SheetsExportOptions) {
     if (options.spreadsheetId.trim() === '') {
@@ -290,7 +348,9 @@ export class SheetsExporter {
    * Returns the remaining cell budget so the caller can refuse a run that would
    * not fit rather than discovering it partway through.
    */
-  async prepare(schema: RecordSchema): Promise<{ cellsUsed: number; cellsFree: number }> {
+  async prepare(
+    schema: RecordSchema,
+  ): Promise<{ cellsUsed: number; cellsFree: number; header: HeaderReport | null }> {
     const { data } = await this.#api.spreadsheets.get({
       spreadsheetId: this.#spreadsheetId,
       fields: 'sheets(properties(sheetId,title,gridProperties(rowCount,columnCount)))',
@@ -303,6 +363,7 @@ export class SheetsExporter {
     }, 0);
 
     const existing = tabs.find((tab) => tab.properties?.title === this.#sheetName);
+    let header: HeaderReport | null = null;
 
     if (existing === undefined) {
       if (this.options.createIfMissing === false) {
@@ -315,15 +376,185 @@ export class SheetsExporter {
     } else {
       this.#sheetId = existing.properties?.sheetId ?? null;
       this.#rowCount = existing.properties?.gridProperties?.rowCount ?? 0;
-      // A tab made by hand, or emptied to start over, gets the header a tab
-      // made here would have had. Without this, rows went in from row 1 with
-      // no header at all.
-      if (this.#sheetId !== null && (await this.#isEmpty())) {
-        await this.#writeHeader(schema, this.#sheetId);
+      if (this.#sheetId !== null) {
+        // Two rows, not one: a tab whose header was cleared but whose rows
+        // remain is not empty, and a header appended there would land below
+        // the data. Such a tab is left as it is.
+        const top = await this.#readRows('1:2');
+        if (top.every((row) => row.every((cell) => cell === ''))) {
+          // A tab made by hand, or emptied to start over, gets the header a
+          // tab made here would have had. Without this, rows went in from
+          // row 1 with no header at all.
+          await this.#writeHeader(schema, this.#sheetId);
+        } else if ((this.options.header ?? 'ignore') !== 'ignore') {
+          // A header cleared by hand over rows that remain is left alone:
+          // there is nothing to align to.
+          const cells = top[0] ?? [];
+          if (cells.some((cell) => cell !== '')) {
+            header = await this.#reconcile(schema, cells, this.#sheetId);
+          }
+        }
       }
     }
 
-    return { cellsUsed, cellsFree: Math.max(0, MAX_CELLS_PER_SPREADSHEET - cellsUsed) };
+    return { cellsUsed, cellsFree: Math.max(0, MAX_CELLS_PER_SPREADSHEET - cellsUsed), header };
+  }
+
+  /** The tab's rows in an A1 row or column range, as text. */
+  async #readRows(range: string): Promise<string[][]> {
+    const { data } = await this.#api.spreadsheets.values.get({
+      spreadsheetId: this.#spreadsheetId,
+      range: `'${this.#sheetName.replace(/'/g, "''")}'!${range}`,
+    });
+    return (data.values ?? []).map((row: unknown[]) =>
+      // Formatted values: text, or a number or boolean as displayed.
+      row.map((cell) =>
+        typeof cell === 'string' || typeof cell === 'number' || typeof cell === 'boolean'
+          ? String(cell).trim()
+          : '',
+      ),
+    );
+  }
+
+  /** Compare the tab's header with the view's columns and, under `align`, fix it. */
+  async #reconcile(
+    schema: RecordSchema,
+    cells: readonly string[],
+    sheetId: number,
+  ): Promise<HeaderReport> {
+    const header = [...cells];
+    const byName = new Map(schema.fields.map((field) => [field.name, field]));
+    const missing = schema.fields
+      .filter((field) => field.blank !== true && !header.includes(field.name))
+      .map((field) => field.name);
+    const extra = header.filter((name) => name !== '' && !byName.has(name));
+    const inTab = header.filter((name) => byName.has(name));
+    const inViewOrder = schema.fields.map((f) => f.name).filter((name) => inTab.includes(name));
+    const reordered = inTab.join('\n') !== inViewOrder.join('\n');
+
+    if (this.options.header !== 'align') {
+      return { added: [], missing, extra, reordered, filled: 0 };
+    }
+
+    // Each missing column goes right after the nearest view column to its
+    // left that the tab has, so "Département" lands between Catégorie and
+    // Ville whatever the team did to the columns around them.
+    const requests: sheets_v4.Schema$Request[] = [];
+    for (const name of missing) {
+      const before = schema.fields.slice(
+        0,
+        schema.fields.findIndex((field) => field.name === name),
+      );
+      const anchor = before
+        .map((field) => header.indexOf(field.name))
+        .filter((index) => index !== -1)
+        .pop();
+      const at = anchor === undefined ? 0 : anchor + 1;
+      header.splice(at, 0, name);
+      requests.push(
+        {
+          insertDimension: {
+            range: { sheetId, dimension: 'COLUMNS', startIndex: at, endIndex: at + 1 },
+            inheritFromBefore: at > 0,
+          },
+        },
+        {
+          updateCells: {
+            start: { sheetId, rowIndex: 0, columnIndex: at },
+            rows: [{ values: [this.#headerCell(name)] }],
+            fields: 'userEnteredValue,userEnteredFormat(textFormat,backgroundColor)',
+          },
+        },
+      );
+    }
+    if (requests.length > 0) {
+      await withRetry(() =>
+        this.#api.spreadsheets.batchUpdate({
+          spreadsheetId: this.#spreadsheetId,
+          requestBody: { requests },
+        }),
+      );
+    }
+
+    let filled = 0;
+    for (const name of missing) {
+      const fill = this.options.fills?.[name];
+      if (fill !== undefined)
+        filled = Math.max(filled, await this.#fill(name, fill, header, sheetId));
+    }
+
+    this.#columns = header.map((name) => byName.get(name) ?? null);
+    if (missing.length > 0) {
+      this.options.logger?.info(
+        { tab: this.#sheetName, added: missing, filled },
+        'added columns to the sheet',
+      );
+    }
+    return { added: missing, missing: [], extra, reordered, filled };
+  }
+
+  /**
+   * Fill column `name` for every row already in the tab, from that row's own
+   * cells: the team may have sorted or filtered the rows, so nothing is
+   * matched by position across rows.
+   */
+  async #fill(
+    name: string,
+    fill: ColumnFill,
+    header: readonly string[],
+    sheetId: number,
+  ): Promise<number> {
+    const target = header.indexOf(name);
+    const sources = await Promise.all(
+      fill.from.map(async (source) => {
+        const index = header.indexOf(source);
+        if (index === -1) return [] as string[][];
+        const letter = columnLetter(index);
+        return this.#readRows(`${letter}2:${letter}`);
+      }),
+    );
+    const rowCount = Math.max(0, ...sources.map((column) => column.length));
+    if (rowCount === 0) return 0;
+
+    const rows: sheets_v4.Schema$RowData[] = [];
+    for (let row = 0; row < rowCount; row += 1) {
+      const cells = Object.fromEntries(
+        fill.from.map((source, i) => [source, sources[i]?.[row]?.[0] ?? '']),
+      );
+      const value = fill.value(cells);
+      rows.push({ values: [value === null ? {} : { userEnteredValue: { stringValue: value } }] });
+    }
+
+    let offset = 0;
+    for (const chunk of chunkBySize(rows)) {
+      const start = offset;
+      await withRetry(() =>
+        this.#api.spreadsheets.batchUpdate({
+          spreadsheetId: this.#spreadsheetId,
+          requestBody: {
+            requests: [
+              {
+                updateCells: {
+                  start: { sheetId, rowIndex: 1 + start, columnIndex: target },
+                  rows: chunk,
+                  fields: 'userEnteredValue',
+                },
+              },
+            ],
+          },
+        }),
+      );
+      offset += chunk.length;
+    }
+    return rowCount;
+  }
+
+  /** One row's cells, in the tab's column order when it has been aligned. */
+  #rowData(row: ExportRow, schema: RecordSchema): sheets_v4.Schema$RowData {
+    if (this.#columns === null) return toRowData(row, schema);
+    return {
+      values: this.#columns.map((field) => (field === null ? {} : toCell(row[field.name], field))),
+    };
   }
 
   /** Rows below the header as of {@link prepare}; each can be filled without new cells. */
@@ -393,23 +624,6 @@ export class SheetsExporter {
     return sheetId;
   }
 
-  /**
-   * Whether the tab holds nothing yet: its first two rows are blank.
-   *
-   * Two rows, not one, so a sheet whose header was cleared but whose rows
-   * remain is not mistaken for empty — a header appended there would land
-   * below the data. Such a tab is left as it is.
-   */
-  async #isEmpty(): Promise<boolean> {
-    const { data } = await this.#api.spreadsheets.values.get({
-      spreadsheetId: this.#spreadsheetId,
-      range: `'${this.#sheetName.replace(/'/g, "''")}'!1:2`,
-    });
-    const blank = (cell: unknown): boolean =>
-      cell === null || cell === undefined || (typeof cell === 'string' && cell.trim() === '');
-    return (data.values ?? []).every((row: unknown[]) => row.every(blank));
-  }
-
   /** The header row, styled, as row 1, and frozen so it stays in view. */
   async #writeHeader(schema: RecordSchema, sheetId: number): Promise<void> {
     await this.#api.spreadsheets.batchUpdate({
@@ -436,15 +650,17 @@ export class SheetsExporter {
   }
 
   #headerRow(schema: RecordSchema): sheets_v4.Schema$RowData {
+    return { values: schema.fields.map((field) => this.#headerCell(field.name)) };
+  }
+
+  #headerCell(name: string): CellData {
     return {
-      values: schema.fields.map((field) => ({
-        userEnteredValue: { stringValue: field.name },
-        userEnteredFormat: {
-          // White on dark slate: unmistakably the header, and readable printed.
-          backgroundColor: HEADER_BACKGROUND,
-          textFormat: { bold: true, foregroundColor: { red: 1, green: 1, blue: 1 } },
-        },
-      })),
+      userEnteredValue: { stringValue: name },
+      userEnteredFormat: {
+        // White on dark slate: unmistakably the header, and readable printed.
+        backgroundColor: HEADER_BACKGROUND,
+        textFormat: { bold: true, foregroundColor: { red: 1, green: 1, blue: 1 } },
+      },
     };
   }
 
@@ -484,7 +700,7 @@ export class SheetsExporter {
     if (sheetId === null) throw new Error('sheet tab was not prepared');
 
     return this.#serialize(async () => {
-      const chunks = chunkBySize(rows.map((row) => toRowData(row, schema)));
+      const chunks = chunkBySize(rows.map((row) => this.#rowData(row, schema)));
       let retries = 0;
 
       for (const [index, chunk] of chunks.entries()) {

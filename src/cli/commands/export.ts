@@ -15,15 +15,20 @@ import { openDatabaseFromConfig } from '../../db/client.js';
 import type { SqliteDriver } from '../../db/driver/types.js';
 import { CURSOR_ZERO, ExportsRepository } from '../../db/repositories/exports.js';
 import { CsvWriter, groupKeyFor } from '../../exporters/csv.js';
+import { departementOf } from '../../automations/google-maps/normalize.js';
 import {
   SheetsExporter,
   estimateMinutes,
+  type ColumnFill,
+  type HeaderReport,
   type SheetsExportOptions,
 } from '../../exporters/sheets.js';
 import { clearSheetRebuild, pendingSheetRebuild } from '../../seeds/rescrape.js';
 import {
   VIEWS,
+  PROSPECTS,
   countRemaining,
+  departementLabel,
   readPage,
   type ExportCursor,
   type ExportRow,
@@ -288,6 +293,10 @@ export async function runExportSheets(options: ExportSheetsOptions): Promise<voi
       spreadsheetId,
       sheetName,
       createIfMissing: settings.createIfMissing,
+      // A sheet the team works in is never rebuilt, so a column the view
+      // gains is added to it in place; one that can be rebuilt is only checked.
+      header: settings.rebuildOnRescrape ? 'check' : 'align',
+      fills: columnFills(driver, entity),
       ...(settings.credentialsFile !== undefined && {
         credentialsFile: resolvePath(settings.credentialsFile, options.config.paths.root),
       }),
@@ -295,6 +304,7 @@ export async function runExportSheets(options: ExportSheetsOptions): Promise<voi
     });
 
     const room = await exporter.prepare(schema);
+    if (room.header !== null && options.json !== true) reportHeader(room.header, sheetName);
     const pending = countRemaining(driver, schema, start);
 
     // Decided before anything changes: refusing after a clear would leave an
@@ -442,5 +452,50 @@ export function runExportStatus(options: { config: ResolvedConfig; json?: boolea
     }
   } finally {
     driver.close();
+  }
+}
+
+/**
+ * How to fill a column the view has gained, for rows already in the sheet.
+ * Only from cells of the same row: Département from its Code postal.
+ */
+export function columnFills(driver: SqliteDriver, entity: string): Record<string, ColumnFill> {
+  if (entity !== PROSPECTS.entity) return {};
+  // As the view names it: the first city of each département, by id.
+  const names = new Map<string, string | null>();
+  for (const city of driver
+    .prepare<{ state_code: string; state: string | null }>(
+      `SELECT state_code, state FROM cities ORDER BY id`,
+    )
+    .all()) {
+    if (!names.has(city.state_code)) names.set(city.state_code, city.state);
+  }
+  return {
+    Département: {
+      from: ['Code postal'],
+      value: (cells) => {
+        const code = departementOf(cells['Code postal']);
+        return departementLabel(code, code === null ? null : names.get(code));
+      },
+    },
+  };
+}
+
+function reportHeader(header: HeaderReport, tab: string): void {
+  if (header.added.length > 0) {
+    console.log(
+      `${symbol.ok} added ${header.added.join(', ')} to "${tab}"` +
+        style.grey(` (filled for ${header.filled.toLocaleString()} row(s) already there)`),
+    );
+  }
+  if (header.missing.length > 0 || header.reordered) {
+    console.log(
+      `${symbol.warn} "${tab}" ` +
+        (header.missing.length > 0
+          ? `lacks ${header.missing.join(', ')}`
+          : 'has its columns in another order') +
+        ': new rows would land under the wrong headers.',
+    );
+    console.log(style.grey('  Rewrite it with:  gms export sheets --rebuild'));
   }
 }

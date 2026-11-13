@@ -20,6 +20,7 @@ import { rulesFromConfig, runQualification } from '../src/qualify/pass.js';
 import { parseOptOut } from '../src/qualify/opt-out.js';
 import { loadConfig } from '../src/config/loader.js';
 import { campaignDir } from '../src/core/util/paths.js';
+import { columnFills } from '../src/cli/commands/export.js';
 import { cleanupTempDirs, tempDir } from './helpers.js';
 
 afterEach(cleanupTempDirs);
@@ -111,6 +112,7 @@ describe('the Gobadiz sheet', () => {
       'Spécialité',
       'Nom',
       'Catégorie',
+      'Département',
       'Ville',
       'Code postal',
       'Adresse',
@@ -144,6 +146,7 @@ describe('the Gobadiz sheet', () => {
       Spécialité: 'Onglerie',
       Nom: 'Nina Nails',
       Catégorie: 'Onglerie',
+      Département: '75 – Paris',
       Ville: 'Paris 11e',
       'Code postal': '75011',
       Téléphone: '06 12 34 56 78',
@@ -152,6 +155,30 @@ describe('the Gobadiz sheet', () => {
       Instagram: 'https://www.instagram.com/nina/',
       Statut: null,
     });
+    driver.close();
+  });
+
+  it('names the département from the campaign cities, and fills old rows the same way', () => {
+    const driver = database();
+    driver
+      .prepare(
+        `INSERT INTO cities (zip, city, state, state_code, lat, lng, active, created_at, updated_at)
+         VALUES ('93100', 'Montreuil', 'Seine-Saint-Denis', '93', 48.86, 2.44, 1, 0, 0),
+                ('78000', 'Versailles', '', '78', 48.8, 2.13, 1, 0, 0)`,
+      )
+      .run();
+    salon(driver, { name: 'Montreuil Nails', region: '93' });
+    // A département its cities do not name: the code alone.
+    salon(driver, { name: 'Ailleurs', region: '78' });
+    expect(sheet(driver).map((r) => r['Département'])).toEqual(['93 – Seine-Saint-Denis', '78']);
+
+    // A sheet made before the column existed gets it filled from each row's
+    // Code postal, and must say exactly what the view says.
+    const fill = columnFills(driver, 'prospects')['Département']!;
+    expect(fill.value({ 'Code postal': '93100' })).toBe('93 – Seine-Saint-Denis');
+    expect(fill.value({ 'Code postal': '75011' })).toBe('75 – Paris');
+    expect(fill.value({ 'Code postal': '78000' })).toBe('78');
+    expect(fill.value({ 'Code postal': '' })).toBeNull();
     driver.close();
   });
 

@@ -18,6 +18,11 @@ export interface FieldDef {
   readonly name: string;
   readonly kind: FieldKind;
   readonly description?: string;
+  /**
+   * Always sent empty: a column the team fills in (Statut, Notes). A sheet
+   * that lacks it is not missing anything of ours.
+   */
+  readonly blank?: boolean;
 }
 
 export interface RecordSchema {
@@ -387,6 +392,11 @@ const PROSPECTS_SQL = `
       l.specialty                                           AS "Spécialité",
       l.name                                                AS "Nom",
       COALESCE(l.category_label, l.category_primary)        AS "Catégorie",
+      CASE WHEN l.state_code IS NULL THEN NULL
+           ELSE l.state_code || COALESCE(' – ' || (
+             SELECT NULLIF(NULLIF(c.state, ''), c.state_code) FROM cities c
+              WHERE c.state_code = l.state_code ORDER BY c.id LIMIT 1), '')
+      END                                                   AS "Département",
       l.city                                                AS "Ville",
       l.postal_code                                         AS "Code postal",
       l.street                                              AS "Adresse",
@@ -425,6 +435,7 @@ export const PROSPECTS: RecordSchema = {
     { name: 'Spécialité', kind: 'text' },
     { name: 'Nom', kind: 'text' },
     { name: 'Catégorie', kind: 'text' },
+    { name: 'Département', kind: 'text', description: '93 – Seine-Saint-Denis' },
     { name: 'Ville', kind: 'text', description: 'with the arrondissement: Paris 11e' },
     { name: 'Code postal', kind: 'digits' },
     { name: 'Adresse', kind: 'text' },
@@ -440,11 +451,25 @@ export const PROSPECTS: RecordSchema = {
     { name: 'Trouvé via', kind: 'text', description: 'search term · area' },
     { name: 'Google Maps', kind: 'text' },
     { name: 'Ajouté le', kind: 'timestamp' },
-    { name: 'Statut', kind: 'text', description: 'left blank for the team' },
-    { name: 'Notes', kind: 'text', description: 'left blank for the team' },
+    { name: 'Statut', kind: 'text', description: 'left blank for the team', blank: true },
+    { name: 'Notes', kind: 'text', description: 'left blank for the team', blank: true },
   ],
   sql: PROSPECTS_SQL,
 };
+
+/**
+ * "93 – Seine-Saint-Denis", as the prospects view writes it: the code, and
+ * the name the campaign's cities give it. The code alone when no city names it.
+ */
+export function departementLabel(
+  code: string | null,
+  name: string | null | undefined,
+): string | null {
+  if (code === null) return null;
+  return name === null || name === undefined || name === '' || name === code
+    ? code
+    : `${code} – ${name}`;
+}
 
 /** How the team's sheet lists leads, and the view each layout sends. */
 export type SheetLayout = 'business' | 'email' | 'all' | 'prospects';

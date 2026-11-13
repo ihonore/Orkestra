@@ -96,6 +96,8 @@ export async function checkSheets(config: ResolvedConfig): Promise<SheetsCheck[]
       spreadsheetId: settings.spreadsheetId,
       sheetName: tab,
       createIfMissing: settings.createIfMissing,
+      // Report only: a check never changes the team's columns.
+      header: 'check',
       ...(credentials !== undefined && { credentialsFile: credentials }),
     });
 
@@ -115,6 +117,30 @@ export async function checkSheets(config: ResolvedConfig): Promise<SheetsCheck[]
         hint: 'Nearly full. Start a fresh spreadsheet, or export to CSV instead.',
       }),
     });
+
+    const header = room.header;
+    if (header !== null) {
+      const appendOnly = !settings.rebuildOnRescrape;
+      const differs = header.missing.length > 0 || header.reordered;
+      results.push({
+        name: 'Sheets columns',
+        status: differs && !appendOnly ? 'warn' : 'ok',
+        detail:
+          header.missing.length > 0
+            ? `"${tab}" lacks ${header.missing.join(', ')}`
+            : header.reordered
+              ? `"${tab}" has its columns in another order`
+              : `"${tab}" has every column` +
+                (header.extra.length > 0 ? `, and the team's own: ${header.extra.join(', ')}` : ''),
+        ...(differs && {
+          hint: appendOnly
+            ? 'The next send adds what is missing, fills it for the rows already there, and\n' +
+              'writes every row under its own header.'
+            : 'New rows would land under the wrong headers. Rewrite the tab with\n' +
+              '`gms export sheets --rebuild`.',
+        }),
+      });
+    }
   } catch (error) {
     const message = errorMessage(error);
     const status =

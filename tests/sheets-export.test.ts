@@ -17,6 +17,7 @@ import type { SqliteDriver } from '../src/db/driver/types.js';
 import { migrate } from '../src/db/migrate.js';
 import { ExportsRepository } from '../src/db/repositories/exports.js';
 import { pendingSheetRebuild, requestSheetRebuild } from '../src/seeds/rescrape.js';
+import { PROSPECTS } from '../src/views/index.js';
 import { startMockSheets, type MockSheets } from './fixtures/mock-sheets.js';
 import { cleanupTempDirs, tempDir, writeFile } from './helpers.js';
 
@@ -278,5 +279,97 @@ describe('sending while the email crawl keeps working', () => {
 
     await expect(r.send()).resolves.toBeUndefined();
     expect(r.emailsInTab()).toHaveLength(1_000);
+  });
+});
+
+describe('the Gobadiz sheet gaining a column', () => {
+  it('adds Département to the team’s tab in place, and sends new rows under it', async () => {
+    const root = tempDir();
+    writeFile(
+      root,
+      'gms.config.yaml',
+      [
+        'exporters:',
+        '  sheets:',
+        `    spreadsheetId: ${SHEET_ID}`,
+        '    layout: prospects',
+        '    rebuildOnRescrape: false',
+      ].join('\n'),
+    );
+    const config = loadConfig({ cwd: root, env: {} });
+    const db = openDatabase({ file: config.paths.databaseFile });
+    migrate(db);
+    db.prepare(
+      `INSERT INTO cities (zip, city, state, state_code, lat, lng, active, created_at, updated_at)
+       VALUES ('75011', 'Paris 11e', 'Paris', '75', 48.86, 2.38, 1, 0, 0),
+              ('93100', 'Montreuil', 'Seine-Saint-Denis', '93', 48.86, 2.44, 1, 0, 0)`,
+    ).run();
+    // Lead 1 went out before the column existed; lead 2 is new.
+    for (const [seq, name, zip, state] of [
+      [1, 'Nina Nails', '75011', '75'],
+      [2, 'Afro Queen', '93100', '93'],
+    ] as const) {
+      db.prepare(
+        `INSERT INTO businesses (dedup_hash, name, city, state_code, postal_code, lead_seq,
+                                 automation_id, first_seen_at, last_seen_at)
+         VALUES (?, ?, ?, ?, ?, ?, 'google-maps', 0, 0)`,
+      ).run([`h${seq}`, name, name === 'Nina Nails' ? 'Paris 11e' : 'Montreuil', state, zip, seq]);
+    }
+    new ExportsRepository(db).advance(
+      'sheets',
+      SHEET_ID,
+      'prospects',
+      { lastId: 1, lastSubId: 0 },
+      1,
+    );
+
+    const before = PROSPECTS.fields.map((f) => f.name).filter((name) => name !== 'Département');
+    const cell = (v: string) => (v === '' ? {} : { userEnteredValue: { stringValue: v } });
+    const old = before.map((name) =>
+      cell(
+        (
+          {
+            Nom: 'Nina Nails',
+            Ville: 'Paris 11e',
+            'Code postal': '75011',
+            Statut: 'Rappeler',
+          } as Record<string, string>
+        )[name] ?? '',
+      ),
+    );
+    const mock = await startMockSheets({
+      existingTabs: [
+        {
+          title: 'Prospects',
+          sheetId: 7,
+          cols: before.length,
+          values: [before.map(cell), old],
+        },
+      ],
+    });
+    open.push(mock, db);
+
+    await runExportSheets({
+      config,
+      json: true,
+      client: { rootUrl: mock.url, authOverride: 'test-key' },
+    });
+
+    const tab = mock
+      .rows('Prospects')
+      .map((row) =>
+        row.map(
+          (c) =>
+            (c as { userEnteredValue?: { stringValue?: string } }).userEnteredValue?.stringValue ??
+            '',
+        ),
+      );
+    const at = (name: string) => tab[0]!.indexOf(name);
+    expect(tab[0]).toEqual(PROSPECTS.fields.map((f) => f.name));
+    expect(tab[1]![at('Département')]).toBe('75 – Paris');
+    expect(tab[1]![at('Statut')]).toBe('Rappeler');
+    expect(tab[2]![at('Nom')]).toBe('Afro Queen');
+    expect(tab[2]![at('Département')]).toBe('93 – Seine-Saint-Denis');
+    expect(tab[2]![at('Code postal')]).toBe('93100');
   });
 });

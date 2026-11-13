@@ -85,11 +85,13 @@ export async function startMockSheets(
         return;
       }
 
-      // values.get, for the header check: the tab's first rows as plain text.
+      // values.get: a block of rows (`1:2`) or of columns (`G2:G`), as plain
+      // text, trimmed as Google trims it — no trailing blank cells or rows.
       const valuesRange = /\/values\/([^?]+)/.exec(path);
       if (req.method === 'GET' && valuesRange !== null) {
         const range = decodeURIComponent(valuesRange[1]!);
         const title = /^'?(.*?)'?!/.exec(range)?.[1]?.replace(/''/g, "'");
+        const a1 = range.slice(range.lastIndexOf('!') + 1);
         const tab = tabs.find((t) => t.title === title);
         const text = (cell: unknown): string => {
           const value = (cell as { userEnteredValue?: Record<string, string | number | boolean> })
@@ -97,8 +99,33 @@ export async function startMockSheets(
           const first = value === undefined ? undefined : Object.values(value)[0];
           return first === undefined ? '' : String(first);
         };
-        const rows = (tab?.values ?? []).slice(0, 2).map((row) => row.map(text));
-        send(200, { range, majorDimension: 'ROWS', ...(rows.length > 0 && { values: rows }) });
+        const column = (letters: string): number =>
+          [...letters].reduce((n, ch) => n * 26 + ch.charCodeAt(0) - 64, 0) - 1;
+        let block: string[][];
+        const byRows = /^(\d+):(\d+)$/.exec(a1);
+        const byColumns = /^([A-Z]+)(\d+):([A-Z]+)(\d*)$/.exec(a1);
+        const all = (tab?.values ?? []).map((row) => row.map(text));
+        if (byRows !== null) {
+          block = all.slice(Number(byRows[1]) - 1, Number(byRows[2]));
+        } else if (byColumns !== null) {
+          const [, from, firstRow, to, lastRow] = byColumns;
+          block = all
+            .slice(Number(firstRow) - 1, lastRow === '' ? undefined : Number(lastRow))
+            .map((row) => row.slice(column(from!), column(to!) + 1));
+        } else {
+          block = all;
+        }
+        const trimmed = block.map((row) => {
+          const out = [...row];
+          while (out.length > 0 && out[out.length - 1] === '') out.pop();
+          return out;
+        });
+        while (trimmed.length > 0 && trimmed[trimmed.length - 1]!.length === 0) trimmed.pop();
+        send(200, {
+          range,
+          majorDimension: 'ROWS',
+          ...(trimmed.length > 0 && { values: trimmed }),
+        });
         return;
       }
 
@@ -159,6 +186,53 @@ export async function startMockSheets(
               });
               return;
             }
+            replies.push({});
+            continue;
+          }
+
+          // A column inserted: every row's cells from there move right.
+          const insert = request['insertDimension'] as
+            | {
+                range?: {
+                  sheetId?: number;
+                  dimension?: string;
+                  startIndex?: number;
+                  endIndex?: number;
+                };
+              }
+            | undefined;
+          if (insert !== undefined && insert.range?.dimension === 'COLUMNS') {
+            const tab = tabs.find((t) => t.sheetId === insert.range?.sheetId);
+            const at = insert.range.startIndex ?? 0;
+            const count = (insert.range.endIndex ?? at) - at;
+            for (const row of tab?.values ?? []) {
+              if (row.length > at) row.splice(at, 0, ...Array.from({ length: count }, () => ({})));
+            }
+            if (tab !== undefined) tab.cols = (tab.cols ?? 26) + count;
+            replies.push({});
+            continue;
+          }
+
+          // updateCells with `start` and `rows` writes cells in place.
+          const write = request['updateCells'] as
+            | {
+                start?: { sheetId?: number; rowIndex?: number; columnIndex?: number };
+                rows?: { values?: unknown[] }[];
+              }
+            | undefined;
+          if (write?.start !== undefined && write.rows !== undefined) {
+            const tab = tabs.find((t) => t.sheetId === write.start?.sheetId);
+            const top = write.start.rowIndex ?? 0;
+            const left = write.start.columnIndex ?? 0;
+            write.rows.forEach((row, r) => {
+              if (tab === undefined) return;
+              while (tab.values.length <= top + r) tab.values.push([]);
+              const target = tab.values[top + r]!;
+              (row.values ?? []).forEach((cell, c) => {
+                while (target.length < left + c) target.push({});
+                target[left + c] = cell;
+              });
+            });
             replies.push({});
             continue;
           }
