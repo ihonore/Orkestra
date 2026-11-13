@@ -202,11 +202,10 @@ describe('French seed lists', () => {
     expect(normalizeStateCode('Georgia')).toBeNull();
   });
 
-  it('loads every Paris arrondissement from the campaign lists', () => {
+  it('loads every Paris arrondissement and Île-de-France commune from the campaign lists', () => {
     const dir = path.join(campaignDir('gobadiz'), 'seeds');
     const parsed = parseCityRows(readCsv(path.join(dir, 'cities.csv')), 'cities.csv');
     expect(parsed.rejected).toEqual([]);
-    expect(parsed.cities).toHaveLength(20);
     expect(parsed.cities[10]).toMatchObject({
       zip: '75011',
       city: 'Paris 11e',
@@ -214,6 +213,17 @@ describe('French seed lists', () => {
       state: 'Paris',
       countyFips: '75111',
     });
+    const count = (code: string) => parsed.cities.filter((c) => c.stateCode === code).length;
+    // Enzo's list, November 2026: the largest communes of each département.
+    expect(['75', '93', '94', '95', '91', '92', '78', '77'].map(count)).toEqual([
+      20, 12, 10, 10, 9, 10, 10, 10,
+    ]);
+    // 78 and 77 come later: loaded, but paused.
+    expect(parsed.cities.filter((c) => !c.active).map((c) => c.stateCode)).toEqual(
+      Array<string>(20).fill('78', 0, 10).fill('77', 10),
+    );
+    // Two communes may share a postcode; the database keys cities by it.
+    expect(new Set(parsed.cities.map((c) => c.zip)).size).toBe(parsed.cities.length);
   });
 
   it('takes a département in the dashboard form', () => {

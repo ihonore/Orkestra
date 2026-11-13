@@ -1,8 +1,9 @@
 # Gobadiz campaign
 
 Beauty professionals in France for Gobadiz: braiders, nail technicians, lash and brow artists,
-make-up artists, barbers, beauty institutes, hair salons and wellness massage. The first run
-covers Paris's 20 arrondissements. Île-de-France and the big cities come later.
+make-up artists, barbers, beauty institutes, hair salons and wellness massage. Paris's 20
+arrondissements were searched first. Next comes Île-de-France, in Enzo's order: 93, 94, 95, 91,
+92, then 78 and 77. The big cities come later.
 
 This folder is a complete, separate gms project. It has its own settings, its own city and
 service lists, its own database (`data/`, git-ignored) and its own Google Sheet. Nothing is
@@ -20,7 +21,7 @@ Everything else works as in the main README, with `--campaign gobadiz` in front 
 
 ```bash
 gms --campaign gobadiz db migrate        # first time: creates data/ and loads seeds/
-gms --campaign gobadiz plan              # 20 arrondissements x 18 search terms = 360 searches
+gms --campaign gobadiz plan              # one search per active city and search term
 gms --campaign gobadiz run --workers 2
 gms --campaign gobadiz enrich emails
 gms --campaign gobadiz qualify           # what is wanted, what is left out and why
@@ -34,18 +35,32 @@ On Windows, later: `scripts\windows\start-dashboard.cmd gobadiz 4601`.
 
 ## Choosing where to search
 
-**Cities page.** Every arrondissement is listed. Pause the ones the team is not ready to call
-yet, and switch them on as you go. A list left sitting for months goes stale. Collecting only
-what you will use is also what the CNIL asks for (data minimisation).
+**Cities page.** It lists every arrondissement, and the largest communes of each Île-de-France
+département. These are the ones with many independent beauty pros and few booking apps. The 78
+and 77 communes are loaded but paused. Pause what the team is not ready to call yet, and switch
+it on as you go. A list left sitting for months goes stale. Collecting only what you will use
+is also what the CNIL asks for (data minimisation).
+
+**One département after another.** On the Control page, step "Choose where to search first",
+pick the order **"Chosen départements, in the order clicked"**. Click the départements in the
+order wanted: 93, 94, 95, 91, 92. Each chip shows its place in line. Then press Apply.
+Every search in the first runs before any search in the second. Inside a département, the
+services go by weight and the largest commune goes first. With 4 workers a département of
+about 10 communes takes roughly 3 hours. Autopilot runs them all unattended.
+
+From the command line: `gms --campaign gobadiz queue --order chosen --states 93,94,95,91,92`.
+
+To open the 78 or the 77 later, resume its communes on the Cities page; that creates their
+searches. Then add the département to the end of the chosen list.
 
 **Services page.** The 18 search terms, weighted in priority order. Braids, afro hair and locks
 come first; hair salons and massage come last. A higher weight is searched first in every active
 arrondissement.
 
-**Suburbs.** A search in Paris 20e also finds salons in Montreuil. They are kept in the database
-but held back ("Hors zone") until a city in their département is active. To open the 93, add
-a Seine-Saint-Denis city on the Cities page (département `93`). The salons already found there
-are released at the next qualification, with no re-scrape.
+**Neighbours.** A search in Paris 20e also finds salons in Montreuil. They are kept in the
+database but held back ("Hors zone") until a city in their département is active. Once one is,
+every salon already found in that département is released at the next qualification, with no
+re-scrape. That includes communes nobody searched.
 
 To add a whole département, add rows to `seeds/cities.csv`:
 - `Zip` is the postcode.
@@ -91,14 +106,27 @@ link. The layout is already set to "One row per qualified lead (French)", writin
 Each salon appears **once**, as soon as it is wanted and its website has been checked for an
 email. Salons with no email are included: the phone and Instagram are often all there is.
 Rows are only ever **added**, never rewritten. The team can sort, filter and fill in **Statut** and
-**Notes** freely.
+**Notes** freely. They can also add their own columns ("Appelé par"…) anywhere: rows are
+written by column name, so a new column stays theirs and nothing shifts.
+
+**One tab for every département, one view per caller.** All leads go to the one **Prospects**
+tab. To work on one département, use a filter view: Données › Vues filtrées › Créer une vue
+filtrée, filter **Département** on "93 – Seine-Saint-Denis", and name it "93". A filter view
+changes only your own screen. Statut and Notes typed in it are saved in the shared list, and
+nobody else's view moves. Ville and Code postal filter the same way.
+
+**When the sheet gains a column.** Département was added after Paris was sent. A column the
+sheet lacks is inserted in place at the next send, and the rows already there are filled from
+their own Code postal. The team's columns move with their data. `gms --campaign gobadiz doctor
+--sheets` shows the state of the columns.
 
 | Column | Meaning |
 | --- | --- |
 | Priorité | **A**: no online booking yet, and an Instagram or a mobile (06/07) number, i.e. an independent you can reach directly. **B**: no online booking yet. **C**: already books through Planity, Treatwell, its own site, etc. |
 | Spécialité | Coiffure, Barbier, Onglerie, Esthétique, Maquillage or Massage, as in the Gobadiz catalogue |
 | Nom, Catégorie | The listing's name, and its Google category in French |
-| Ville, Code postal, Adresse | "Paris 11e", as Gobadiz writes cities |
+| Département | "93 – Seine-Saint-Denis", from the salon's own postcode, whichever search found it |
+| Ville, Code postal, Adresse | "Paris 11e", as Gobadiz writes cities; the commune elsewhere |
 | Téléphone, Portable | French format; "oui" for a mobile |
 | Email, Autres emails | The best address first (a person's before contact@, the salon's own domain before gmail) |
 | Instagram | From the listing or the salon's website |

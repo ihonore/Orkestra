@@ -306,7 +306,7 @@ the plan and the next ten searches.
 
 | Flag              | Default  | Meaning                                                       |
 | ----------------- | -------- | ------------------------------------------------------------- |
-| `--order <order>` | `spread` | `spread`: round-robin across states. `by-state`: one at a time |
+| `--order <order>` | `spread` | `spread`: round-robin across states. `by-state`: one at a time, alphabetically. `chosen`: the `--states` one after another, in the order given |
 | `--states <list>` | none     | State codes to favour, e.g. `TX,FL,CA`. `""` clears them       |
 | `--only`          | off      | Search only `--states`. The rest wait, shown as "on hold"      |
 | `--all`           | —        | Undo `--only`: search every state again                       |
@@ -320,11 +320,16 @@ the plan and the next ten searches.
   ~47 states with different services. A state with many finished searches
   starts that many rounds later, so the backlog evens out.
 - **`by-state`** is the old behaviour: finish one state, then the next.
+- **`chosen`** runs the `--states` one after another, in the order given:
+  every search in the first before any in the second, whatever the service
+  weights. Inside each, services still go by weight. Gobadiz uses it to open
+  Île-de-France département by département:
+  `gms --campaign gobadiz queue --order chosen --states 93,94,95,91,92`.
 - **Chosen states** run before the rest (still spread between themselves), or,
   with `--only`, are the only ones that run. Leaving "only" mode resumes the
   others. A city or service you paused yourself stays paused in every mode.
 - A service's **weight** still wins over position: a weight-2 service runs
-  everywhere before any weight-1 search.
+  everywhere before any weight-1 search, except across `chosen` states.
 - The plan is stored in the database. `gms run`, the dashboard and `gms plan`
   all apply it, and a change takes effect from the next search a running
   scrape picks up, with no restart.

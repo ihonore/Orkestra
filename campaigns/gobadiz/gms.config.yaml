@@ -28,8 +28,11 @@ market:
   # Phones are read as French numbers (+33), addresses as "12 Rue X, 75011
   # Paris", and the département goes where a US state would.
   country: FR
-  # "tresses Paris 11e". The seed city is already "Paris 11e", so no state.
-  queryTemplate: '{category} {city}'
+  # "tresses Saint-Denis 93200". Without the postcode Google read
+  # "tresses Clichy" as the name of one place and returned a single result;
+  # with it, 29 salons (live check, November 2026). Paris searches ran
+  # without it, as "tresses Paris 11e".
+  queryTemplate: '{category} {city} {zip}'
   gl: fr
   acceptLanguage: fr-FR,fr;q=0.9,en;q=0.5
 
