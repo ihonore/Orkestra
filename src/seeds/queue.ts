@@ -17,6 +17,10 @@
  *    evens out instead of the early states staying ahead.
  *  - **by-state**: finish one state before the next, alphabetically — the old
  *    behaviour, for when one complete state is worth more than breadth.
+ *  - **chosen**: the chosen states one after another, in the order chosen —
+ *    every search in the first before any in the second, whatever the service
+ *    weights. A campaign that opens one area after another (93, then 94, then
+ *    95) runs unattended instead of being switched over by hand.
  *
  * On top of either, states can be put **first** (searched before the rest) or
  * made the **only** ones searched (the rest wait as `paused`). Service weight
@@ -40,11 +44,11 @@ import { readHold } from './hold.js';
 const AUTOMATION_ID = 'google-maps';
 const PLAN_KEY = 'queue_plan';
 
-export type QueueOrder = 'spread' | 'by-state';
+export type QueueOrder = 'spread' | 'by-state' | 'chosen';
 
 export interface QueuePlan {
   readonly order: QueueOrder;
-  /** State codes to favour. Empty means no preference. */
+  /** State codes to favour, in the order chosen. Empty means no preference. */
   readonly states: readonly string[];
   /** True: search only `states`. False: search them first, then the rest. */
   readonly only: boolean;
@@ -62,6 +66,12 @@ export const DEFAULT_PLAN: QueuePlan = { order: 'spread', states: [], only: fals
  */
 const RESCRAPE_BAND = 100_000_000_000_000;
 const FOCUS_BAND = 10_000_000_000_000;
+/**
+ * Under the `chosen` order, the gap between one chosen state and the next. It
+ * outranks weight and position together (≈1.01e9), and 900 chosen states still
+ * fit under `RESCRAPE_BAND`.
+ */
+const FOCUS_STEP = 10_000_000_000;
 const WEIGHT_BAND = 10_000_000;
 const POSITION_SPAN = 10_000_000;
 
@@ -77,7 +87,9 @@ export function readQueuePlan(driver: SqliteDriver): QueuePlan {
 
 /** Coerce anything — a form, a CLI flag, an old stored value — into a valid plan. */
 export function normalizePlan(input: Partial<Record<keyof QueuePlan, unknown>>): QueuePlan {
-  const order: QueueOrder = input.order === 'by-state' ? 'by-state' : 'spread';
+  const order: QueueOrder =
+    input.order === 'by-state' || input.order === 'chosen' ? input.order : 'spread';
+  // Kept in the order given: under `chosen`, that order is the plan.
   const states = Array.isArray(input.states)
     ? [
         ...new Set(
@@ -85,7 +97,7 @@ export function normalizePlan(input: Partial<Record<keyof QueuePlan, unknown>>):
             .map((s) => normalizeStateCode(typeof s === 'string' ? s : null))
             .filter((s): s is string => s !== null),
         ),
-      ].sort()
+      ]
     : [];
   // "Only these states" with none chosen would stop everything; treat it as
   // no restriction rather than as an instruction to search nothing.
@@ -138,7 +150,9 @@ export function computePriorities(
   }
 
   const position = new Map<number, number>();
-  if (plan.order === 'spread') {
+  // `chosen` ranks the chosen states below; inside each, and for the states
+  // after them, it spreads like the default.
+  if (plan.order !== 'by-state') {
     const stateCount = states.length;
     for (const job of jobs) {
       const s = stateIndex.get(job.stateCode)!;
@@ -162,14 +176,20 @@ export function computePriorities(
     sorted.forEach((job, index) => position.set(job.id, index));
   }
 
-  const focus = new Set(plan.states);
+  const focus = new Map(plan.states.map((state, rank) => [state, rank]));
+  const focusOf = (state: string): number => {
+    const rank = focus.get(state);
+    if (rank === undefined) return 0;
+    if (plan.order !== 'chosen') return FOCUS_BAND;
+    return FOCUS_BAND + (Math.min(plan.states.length, 900) - Math.min(rank, 899)) * FOCUS_STEP;
+  };
   const priorities = new Map<number, number>();
   for (const job of jobs) {
     const weight = Math.round((categories.get(job.categoryId)?.weight ?? 1) * 100);
     priorities.set(
       job.id,
       (rescrape.has(job.id) ? RESCRAPE_BAND : 0) +
-        (focus.has(job.stateCode) ? FOCUS_BAND : 0) +
+        focusOf(job.stateCode) +
         weight * WEIGHT_BAND +
         (POSITION_SPAN - 1 - Math.min(position.get(job.id)!, POSITION_SPAN - 1)),
     );

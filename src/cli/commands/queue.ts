@@ -25,7 +25,12 @@ export interface QueueCommandOptions {
 }
 
 function describePlan(plan: QueuePlan): string {
-  const order = plan.order === 'spread' ? 'spread across states' : 'one state at a time';
+  const order =
+    plan.order === 'spread'
+      ? 'spread across states'
+      : plan.order === 'chosen'
+        ? 'chosen states one after another'
+        : 'one state at a time';
   if (plan.states.length === 0) return `${order}, all states`;
   return `${order}, ${plan.only ? 'only' : 'first'}: ${plan.states.join(', ')}`;
 }

@@ -527,6 +527,14 @@ export const FRENCH_LABELS: readonly (readonly [string, string])[] = [
   ['<option value="">All states</option>', '<option value="">All départements</option>'],
   ['>Spread across states</option>', '>Spread across départements</option>'],
   ['>One state at a time</option>', '>One département at a time</option>'],
+  [
+    '>Chosen states, in the order clicked</option>',
+    '>Chosen départements, in the order clicked</option>',
+  ],
+  [
+    'With "Chosen states, in the order clicked", every search in state 1 runs before any in state 2',
+    'With "Chosen départements, in the order clicked", every search in département 1 runs before any in département 2',
+  ],
   ['<label>Chosen states</label>', '<label>Chosen départements</label>'],
   ['>Clear states</button>', '>Clear départements</button>'],
   ['> One file per state</label>', '> One file per département</label>'],

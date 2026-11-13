@@ -484,6 +484,30 @@ describe('queue order', () => {
     expect(next(driver, 4).map((j) => j.stateCode)).toEqual(['FL', 'FL', 'FL', 'FL']);
   });
 
+  it('runs chosen states one after another, in the order chosen, over service weight', () => {
+    // Gobadiz opens Île-de-France département by département: all of the 93,
+    // then the 94. Without the ranking, a heavy service ran everywhere first.
+    const driver = country();
+    const roofing = new CategoriesRepository(driver).bySlug('roofing')!;
+    updateCategory(driver, roofing.id, { name: 'Roofing', weight: 9 });
+    setQueuePlan(driver, { order: 'chosen', states: ['TX', 'AL'] });
+    expect(readQueuePlan(driver).states).toEqual(['TX', 'AL']);
+
+    // Two cities x four services in each state.
+    const order = next(driver, 20).map((j) => j.stateCode);
+    expect(order.slice(0, 8)).toEqual(Array(8).fill('TX'));
+    expect(order.slice(8, 16)).toEqual(Array(8).fill('AL'));
+    // Inside a state the heavier service still goes first.
+    expect(next(driver, 2).map((j) => j.category)).toEqual(['Roofing', 'Roofing']);
+  });
+
+  it('keeps the other orders as they were: chosen states share one rank', () => {
+    const driver = country();
+    setQueuePlan(driver, { order: 'spread', states: ['TX', 'AL'] });
+    const first = next(driver, 4).map((j) => j.stateCode);
+    expect(new Set(first)).toEqual(new Set(['TX', 'AL']));
+  });
+
   it('stores the plan with the database and cleans what it is given', () => {
     const driver = country();
     setQueuePlan(driver, { order: 'nonsense', states: ['tx', 'TX', 'Texas', 7], only: true });

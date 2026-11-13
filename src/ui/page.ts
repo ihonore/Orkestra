@@ -664,7 +664,8 @@ async function loadControl() {
         '<div class="opts">' +
         '<label>Order</label><select id="q-order">' +
         '<option value="spread"' + (q.plan.order === 'spread' ? ' selected' : '') + '>Spread across states</option>' +
-        '<option value="by-state"' + (q.plan.order === 'by-state' ? ' selected' : '') + '>One state at a time</option></select>' +
+        '<option value="by-state"' + (q.plan.order === 'by-state' ? ' selected' : '') + '>One state at a time</option>' +
+        '<option value="chosen"' + (q.plan.order === 'chosen' ? ' selected' : '') + '>Chosen states, in the order clicked</option></select>' +
         '<label>Chosen states</label><select id="q-scope">' +
         '<option value="first"' + (q.plan.only ? '' : ' selected') + '>Search these first</option>' +
         '<option value="only"' + (q.plan.only ? ' selected' : '') + '>Search only these</option></select>' +
@@ -672,6 +673,7 @@ async function loadControl() {
         '<button class="go" id="do-queue">Apply</button>' +
         '</div><div class="opts states" id="q-states">' + stateChips() + '</div>' +
         '<p style="margin-top:9px">Click states to choose them, then Apply. The number under each is the searches left there. ' +
+        'With "Chosen states, in the order clicked", every search in state 1 runs before any in state 2, and so on. ' +
         'Searching only some states parks the rest as on hold; a city you paused yourself stays paused either way.</p>' +
         '<div class="label" style="margin-top:15px">Next up</div>' +
         '<ol class="next">' + (q.next.length
@@ -936,17 +938,21 @@ let queue = { plan: { order: 'spread', states: [], only: false }, states: [], ne
 let queueDraft = null;
 
 function planText(p) {
-  const order = p.order === 'spread' ? 'spread' : 'one state at a time';
+  const order = p.order === 'spread' ? 'spread' : p.order === 'chosen' ? 'in order' : 'one state at a time';
   if (!p.states.length) return order + ' · all states';
   const list = p.states.length > 4 ? p.states.length + ' states' : p.states.join(', ');
   return order + ' · ' + (p.only ? 'only ' + list : list + ' first');
 }
 
 function stateChips() {
-  const chosen = new Set(queueDraft ?? queue.plan.states);
+  const order = [...(queueDraft ?? queue.plan.states)];
+  const chosen = new Set(order);
+  // Under "in the order clicked", each chosen chip shows its place in line.
+  const ranked = ($('#q-order') ? $('#q-order').value : queue.plan.order) === 'chosen';
   return queue.states.map((st) =>
     '<button class="chip st" data-state="' + esc(st.code) + '" aria-pressed="' + chosen.has(st.code) + '" title="' +
     esc(st.name + ': ' + num(st.done) + ' searches done, ' + num(st.remaining) + ' to go') + '">' +
+    (ranked && chosen.has(st.code) ? (order.indexOf(st.code) + 1) + '. ' : '') +
     esc(st.code) + '<small>' + (st.remaining ? num(st.remaining) : 'done') + '</small></button>').join('');
 }
 
@@ -1074,9 +1080,12 @@ function wireControls() {
     if (!chip) return;
     const chosen = new Set(queueDraft ?? queue.plan.states);
     if (chosen.has(chip.dataset.state)) chosen.delete(chip.dataset.state); else chosen.add(chip.dataset.state);
-    queueDraft = [...chosen].sort();
-    chip.setAttribute('aria-pressed', String(chosen.has(chip.dataset.state)));
+    // In the order clicked: that order is the plan under "chosen".
+    queueDraft = [...chosen];
+    chips.innerHTML = stateChips();
   });
+  const orderSelect = $('#q-order');
+  if (orderSelect && chips) orderSelect.addEventListener('change', () => { chips.innerHTML = stateChips(); });
   on('#q-clear', () => {
     queueDraft = [];
     $$('#q-states [data-state]').forEach((c) => c.setAttribute('aria-pressed', 'false'));

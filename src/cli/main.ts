@@ -266,8 +266,9 @@ export function buildProgram(): Command {
     .addOption(
       new Option(
         '--order <order>',
-        'spread: round-robin across states; by-state: one at a time',
-      ).choices(['spread', 'by-state']),
+        'spread: round-robin across states; by-state: one at a time, alphabetically; ' +
+          'chosen: the --states one after another, in the order given',
+      ).choices(['spread', 'by-state', 'chosen']),
     )
     .option('--states <list>', 'comma-separated state codes to favour; "" clears them')
     .option('--only', 'search only --states; the rest wait as paused')
@@ -275,7 +276,7 @@ export function buildProgram(): Command {
     .option('--json', 'emit machine-readable output', false)
     .action(
       (options: {
-        order?: 'spread' | 'by-state';
+        order?: 'spread' | 'by-state' | 'chosen';
         states?: string;
         only?: boolean;
         all?: boolean;
